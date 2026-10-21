@@ -354,3 +354,54 @@ Timeouts on every call, retries with exponential backoff and jitter for idempote
 
 ### How would you design a system for a flash sale with limited inventory?
 Protect the core with a CDN and queue-based waiting room, rate limit per user, keep inventory counters in Redis with atomic decrements (Lua) as a reservation step, create orders asynchronously via a queue, reserve stock with TTL until payment completes, use idempotency keys for payment, reconcile with the database as the source of truth, and pre-scale/load test beforehand.
+
+# Scenario Questions
+
+## Intermediate
+
+### Your service's database melts every day at 9 AM when a marketing email goes out. How do you handle the spike?
+- **Cache** hot reads (CDN for static content and landing pages, Redis for API data).
+- **Queue** writes and expensive work so you absorb bursts and process them asynchronously.
+- Autoscale stateless tiers ahead of time (scheduled scaling).
+- Rate-limit, and shed load gracefully.
+- Add read replicas.
+- Ask marketing to **stagger** email sends, which is the cheapest fix.
+
+### A payment request times out and the client retries. The customer is charged twice. How do you design against this?
+Use **idempotency keys**. The client sends a unique key per payment intent, and the server stores the key with its result (with a unique constraint) and returns the stored result on retries. Combine it with an outbox pattern for reliable events, and reconciliation jobs with the payment provider.
+
+### Design a rate limiter that allows 100 requests per minute per user across 20 API servers.
+Keep the counters in a shared, fast store (**Redis**) so every server sees the same count. Choose an algorithm:
+- **Token bucket**: allows bursts.
+- **Sliding-window log or counter**: accurate.
+- **Fixed window**: simple, but permits bursts at window edges.
+
+Make it atomic with a Lua script or `INCR` plus `EXPIRE`. Return `429` with `Retry-After`, and fail open or closed by policy if Redis is down. Use local token buckets in front for very hot paths.
+
+## Advanced
+
+### Users in Asia report 800 ms latency on your US-hosted app. What do you change?
+- Serve static assets and cacheable API responses from a **CDN** edge.
+- Deploy read-heavy services in an Asian region, with **read replicas** or a geo-distributed database.
+- Route users with latency-based DNS or anycast.
+- Reduce round trips (HTTP/2 or HTTP/3, batched requests, edge compute).
+
+Multi-region writes bring consistency trade-offs (CRDTs, conflict resolution, single-leader per tenant).
+
+### An order service and an inventory service must stay consistent without a distributed transaction. How?
+Use the **Saga pattern**: a sequence of local transactions, each publishing an event, with **compensating actions** on failure (cancel the order if the stock reservation fails). Orchestrate it centrally or through choreography. Use the **transactional outbox** so writing to the DB and publishing the event can't diverge, and idempotent consumers to handle duplicates.
+
+# Tricky Questions
+
+## Intermediate
+
+### You cache user profiles for 1 hour. A user updates their name but still sees the old one. What are your options?
+Invalidate or update the cache on write (write-through, or delete-on-write followed by re-read), use shorter TTLs, read your own writes (bypass the cache for the user who just wrote), or version the cache key. Watch for races where a stale read repopulates the cache after the delete; delayed double-delete or leases handle that.
+
+### Is adding a cache always a performance win?
+No. Caches add **staleness**, invalidation bugs, cold-start stampedes (when many requests miss at once), memory cost and another failure mode. They help when reads far outnumber writes and slightly stale data is acceptable. Protect against **thundering herd** problems with request coalescing, jittered TTLs and early refresh.
+
+## Advanced
+
+### Under CAP, during a network partition, your system keeps accepting writes on both sides. Is it CP or AP, and what's the cost?
+It's **AP**: it stays available, so the two sides diverge and you need conflict resolution afterwards (last-write-wins loses data; CRDTs or app-level merges are safer). A CP system would reject writes on the minority side to stay consistent. PACELC adds that even without a partition you're trading latency against consistency.

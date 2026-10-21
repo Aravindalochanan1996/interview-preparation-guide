@@ -551,3 +551,54 @@ An interface (`writeValue`, `registerOnChange`, `registerOnTouched`, `setDisable
 
 ### What is AOT compilation and why does it matter?
 Ahead-of-time compilation converts templates and decorators into efficient JavaScript at build time (Ivy). Benefits: faster startup (no compiler shipped), template errors caught at build, smaller bundles with tree-shaking, and better security (no runtime template evaluation).
+
+# Scenario Questions
+
+## Beginner
+
+### A component's template doesn't update after you change data inside a `setTimeout` from a third-party library. Why?
+The library probably runs **outside Angular's zone** (or you're zoneless or using `OnPush`), so change detection isn't triggered. Fix it with **signals** (`signal.set()` schedules an update), `ngZone.run(() => …)`, `ChangeDetectorRef.markForCheck()` with `OnPush`, or wrap the library in an observable consumed with the `async` pipe.
+
+## Intermediate
+
+### Your dashboard makes the same HTTP call five times when the page loads. How do you fix it?
+Each `async` pipe subscription to a **cold** `HttpClient` observable fires a new request. Share the result with `shareReplay({ bufferSize: 1, refCount: true })` in a service, subscribe once and expose a signal (`toSignal`), or cache it in a store (NgRx or a signal store). Also check for duplicated `*ngIf`/`@if` blocks that each re-subscribe.
+
+### A component leaks memory: subscriptions keep running after you navigate away. What's the fix?
+Unsubscribe automatically:
+- the `async` pipe, or `toSignal()`
+- `takeUntilDestroyed()` (Angular 16+) in an injection context
+- a `DestroyRef` callback
+
+Avoid manual `subscribe()` in components where you can. Use `take(1)` or `first()` for one-off calls.
+
+## Advanced
+
+### A large enterprise Angular app has slow initial load and sluggish lists. What's your optimisation plan?
+- **Lazy-load** routes and standalone components, and use `@defer` blocks for heavy below-the-fold widgets.
+- Use `OnPush` or signals everywhere, and `track` in `@for` (or `trackBy`).
+- Virtual scrolling (CDK) for long lists.
+- Run the bundle analyzer and drop heavy libraries (moment → date-fns).
+- SSR with hydration for first paint, and image optimisation (`NgOptimizedImage`).
+- Consider going zoneless.
+
+# Tricky Questions
+
+## Beginner
+
+### Why does this throw "ExpressionChangedAfterItHasBeenCheckedError" in development?
+```ts
+ngAfterViewInit() { this.title = 'Loaded'; }
+```
+In dev mode Angular runs a second check after each change-detection pass and finds a bound value that changed **during** the pass. Set the value earlier (`ngOnInit`), or use a signal or an async update. Don't hide the error with `setTimeout`.
+
+## Intermediate
+
+### What's the difference in behaviour between `switchMap`, `mergeMap`, `concatMap` and `exhaustMap` for a search box?
+- **`switchMap`** cancels the previous inner request. This is the right choice for search and typeahead.
+- **`mergeMap`** runs them all concurrently, so results can arrive out of order.
+- **`concatMap`** queues them in order, which suits sequential saves.
+- **`exhaustMap`** ignores new emissions while one is running, which suits login or submit buttons (it prevents double submits).
+
+### A service is `providedIn: 'root'`, but a lazy-loaded module also lists it in `providers`. How many instances exist?
+**Two.** The lazy module gets its own child injector with a separate instance, so state isn't shared with the root singleton. Remove the duplicate provider unless you deliberately want a scoped instance.

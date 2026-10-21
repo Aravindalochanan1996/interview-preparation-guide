@@ -410,3 +410,43 @@ On the server, a single Node process handles many requests. Module-level singlet
 
 ### How would you build a custom `v-model`-compatible input?
 Use `defineModel()` in the child (or `modelValue` prop + `update:modelValue` emit), bind it to the inner input, forward attributes with `v-bind="$attrs"` (and `inheritAttrs: false` if needed), support modifiers through `defineModel`'s second tuple element, and emit validation state if required.
+
+# Scenario Questions
+
+## Beginner
+
+### You destructure props in `<script setup>` and the values stop updating. Why?
+In Vue < 3.5, `const { title } = defineProps()` copies the value and loses reactivity. Use `props.title`, `toRefs(props)`, or Vue 3.5+, where destructured `defineProps` stays reactive. The same applies to reactive store objects: use `storeToRefs` with Pinia.
+
+## Intermediate
+
+### A watcher on a nested object never fires when a nested field changes. How do you fix it?
+A getter watcher such as `watch(() => state.user, cb)` fires only when the returned reference changes, not when a field inside it is mutated. Use `watch(() => state.user.address.city, cb)` for one field, `{ deep: true }` for the whole tree (which costs more), or watch a reactive object directly, which is deep by default.
+
+### After `npm run build`, routes work from the home page but refreshing `/settings` returns 404. Why?
+Vue Router in **history mode** needs the web server to fall back to `index.html` for unknown paths (`try_files $uri /index.html` in nginx, or rewrites on Netlify and Vercel). Alternatively use hash mode.
+
+## Advanced
+
+### A Vue SSR (Nuxt) app leaks one user's data to another under load. What's the likely bug?
+State is held at **module scope** (a singleton store or a plain `const state = reactive({})` outside a function), and that's shared across requests on the server. Create state per request: Pinia created per app instance, `useState` in Nuxt, and provide/inject instead of global singletons.
+
+# Tricky Questions
+
+## Beginner
+
+### Why does the template still show the old value?
+```js
+const count = ref(0);
+let copy = count.value;
+copy++;
+```
+`copy` is a plain number copied out of the ref, not reactive. Only `count.value++` triggers updates.
+
+## Intermediate
+
+### What's the difference between `computed` and a method called in the template?
+A `computed` is **cached** and recalculated only when its reactive dependencies change. A method runs **on every re-render**. Use computed for derived data, and never put side effects in a computed.
+
+### Does `v-if` or `v-for` take priority on the same element in Vue 3?
+In Vue 3, **`v-if` has higher priority**, so it can't reference the loop variable. That's the opposite of Vue 2. Move the condition to a wrapping `<template v-for>`, or filter with a computed.

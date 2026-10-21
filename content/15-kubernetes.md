@@ -506,3 +506,61 @@ Helm is a package manager with templated charts, values files, releases and roll
 
 ### How do you achieve zero-downtime deployments?
 Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shutdown handling SIGTERM with a preStop sleep so endpoints update before termination, PodDisruptionBudgets, multiple replicas spread across nodes/zones, backward-compatible DB migrations, and canary/blue-green strategies for risky changes.
+
+# Scenario Questions
+
+## Beginner
+
+### A pod is stuck in `CrashLoopBackOff`. Walk through how you debug it.
+1. `kubectl describe pod <p>`: check events, exit code, `OOMKilled`, and failed probes.
+2. `kubectl logs <p> --previous` shows the logs of the crashed container.
+3. Common causes: the app exits (bad config, a missing env var or secret, an unreachable DB), the **liveness probe** kills it during slow start-up (add a `startupProbe`), or memory limits are too low (exit code 137).
+4. To poke around, run `kubectl debug` or override the command (`sleep infinity`).
+
+### A pod stays in `Pending`. What are the usual reasons?
+`kubectl describe pod` shows the scheduler's message. Usual reasons:
+- insufficient CPU or memory on every node (requests too high)
+- a node selector, affinity rule or taint the pod doesn't tolerate
+- an unbound PVC (no StorageClass, or a zone mismatch)
+- ResourceQuota exceeded
+- an image pull secret missing (that shows as `ImagePullBackOff` once the pod is scheduled)
+
+## Intermediate
+
+### Users get 502 errors for a few seconds during every rolling deploy. How do you get to zero downtime?
+- Add a **readinessProbe**, so traffic only goes to ready pods.
+- Set `maxUnavailable: 0` and `maxSurge: 1`.
+- Handle SIGTERM gracefully, and add a `preStop` hook (`sleep 5–10`) so endpoints are removed from load balancers before the process stops.
+- Make sure `terminationGracePeriodSeconds` covers the drain time.
+- Add a PodDisruptionBudget for node maintenance.
+
+### A service can't reach another service by name. How do you troubleshoot it?
+- Check DNS (`nslookup svc.namespace.svc.cluster.local` from a debug pod).
+- Check that the Service selector matches the pod labels (`kubectl get endpoints <svc>`; if it's empty, the selector is wrong or no pod is ready).
+- Check that `targetPort` matches the container port.
+- Look for **NetworkPolicies** blocking traffic.
+- Check that the app listens on `0.0.0.0`.
+
+## Advanced
+
+### The cluster autoscaler adds nodes, but pods are still slow to scale during traffic spikes. How do you improve it?
+- Tune the **HPA** (lower targets, custom or external metrics such as RPS or queue length via KEDA, faster `behavior.scaleUp`).
+- Keep **headroom** with low-priority placeholder pods (overprovisioning).
+- Use faster node provisioning (Karpenter, pre-warmed node pools).
+- Shrink image size and start-up time, and use startup probes.
+- Set requests correctly so the scheduler packs pods properly.
+
+# Tricky Questions
+
+## Beginner
+
+### You `kubectl delete pod` a pod from a Deployment. What happens?
+A new pod is created straight away. The ReplicaSet controller reconciles back to the desired replica count. To stop it, scale the Deployment to 0 or delete the Deployment.
+
+## Intermediate
+
+### A container has `requests.memory: 256Mi` and `limits.memory: 512Mi`, and it uses 600Mi. What happens? What if it's CPU instead?
+Memory over the limit means the container is **OOMKilled** (exit code 137) and restarted. CPU over the limit means it's **throttled**, not killed. Requests drive scheduling and QoS class; when requests equal limits the pod is **Guaranteed**, which makes it the last to be evicted.
+
+### Why might a liveness probe that checks the database cause an outage?
+If the database blips, **every** pod fails liveness and is restarted at the same time, which turns a short database issue into a full outage plus a restart storm. A liveness probe should check only whether the process itself is healthy. Put dependency checks in the **readiness** probe, or nowhere.

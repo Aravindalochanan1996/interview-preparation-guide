@@ -497,3 +497,58 @@ The servlet filter chain delegates to Spring Security's `FilterChainProxy`, whic
 
 ### Optimistic vs pessimistic locking in JPA?
 Optimistic locking uses a `@Version` field; updates include the version and fail with `OptimisticLockException` if another transaction changed the row, suitable for low contention. Pessimistic locking (`@Lock(PESSIMISTIC_WRITE)`) issues `SELECT … FOR UPDATE`, blocking others until commit — suitable for high contention but reduces concurrency.
+
+# Scenario Questions
+
+## Beginner
+
+### Your Spring Boot app fails to start with "Port 8080 was already in use". What are your options?
+Another process (often a previous run of the app) holds the port. Find it with `lsof -i :8080` (Linux/macOS) or `netstat -ano | findstr 8080` (Windows) and stop it, or change the port with `server.port=8081` (or `0` for a random port in tests).
+
+## Intermediate
+
+### The orders API is slow, and the logs show hundreds of SQL queries per request. How do you fix it?
+It's the JPA **N+1 problem**: lazy associations are loaded one by one while serialising entities. Fixes:
+- `JOIN FETCH` in JPQL, or `@EntityGraph`
+- `@BatchSize` / `hibernate.default_batch_fetch_size`
+- returning **DTO projections** instead of entities
+- turning off Open Session in View (`spring.jpa.open-in-view=false`) so lazy loading can't silently happen in the view layer
+
+Watch queries with `spring.jpa.show-sql` or datasource-proxy.
+
+### A `@Transactional` method doesn't roll back when an error occurs. Why?
+- By default only **unchecked** exceptions (`RuntimeException`, `Error`) trigger rollback. Add `rollbackFor = Exception.class` for checked ones.
+- The method is called from **within the same class** (self-invocation), which bypasses the proxy, so there's no transaction at all.
+- The method isn't public (on older Spring versions).
+- The exception is caught and swallowed.
+
+## Advanced
+
+### Production pods crash with `OutOfMemoryError: Java heap space` under load. How do you investigate?
+- Enable `-XX:+HeapDumpOnOutOfMemoryError`, and analyse the dump in Eclipse MAT (the dominator tree).
+- Check GC logs and metrics with Micrometer/Prometheus.
+- Common causes: unbounded caches, loading huge result sets (use pagination or streaming), ThreadLocal leaks, and a heap that's too small for the container (set `-XX:MaxRAMPercentage=75`).
+- For thread-pool exhaustion, consider **virtual threads** (`spring.threads.virtual.enabled=true`) for blocking I/O workloads.
+
+# Tricky Questions
+
+## Beginner
+
+### What does this print? `String a = "hi"; String b = new String("hi"); System.out.println(a == b); System.out.println(a.equals(b));`
+`false`, then `true`. `==` compares **references**: `a` comes from the string pool and `b` is a new object. `equals` compares content. `b.intern() == a` would be `true`.
+
+### What does `Integer x = 127, y = 127; Integer p = 128, q = 128; System.out.println((x == y) + " " + (p == q));` print?
+`true false`. `Integer.valueOf` caches values from **-128 to 127**, so `x` and `y` are the same object while `p` and `q` are different objects. Always compare boxed numbers with `equals()`.
+
+## Intermediate
+
+### What happens here, and is it safe? `List<Integer> list = new ArrayList<>(List.of(1, 2, 3)); for (Integer i : list) if (i == 2) list.remove(i);`
+Surprisingly, **nothing is thrown, and nothing is printed either**. `2` is the second-to-last element: after it's removed, the size becomes 2, the iterator's cursor is also 2, so `hasNext()` returns false and the loop ends quietly. Element `3` is never visited. Remove `1` instead and you get a **`ConcurrentModificationException`**. Either way, modifying a list inside a for-each loop is a bug. Use `list.removeIf(i -> i == 2)` or `Iterator.remove()`. Note too that `remove(Object)` and `remove(int index)` are different overloads.
+
+### Why does this `HashMap` lose your object? You put a `Person` as a key, then change `person.name`, then `map.get(person)` returns null.
+`hashCode` depends on `name`, so after the mutation the lookup searches the **wrong bucket**. Map keys must be immutable, or at least their hashCode/equals fields must never change. Records make good keys.
+
+## Advanced
+
+### Is `volatile` enough to make `count++` thread-safe?
+**No.** `volatile` guarantees **visibility** and ordering, not atomicity. `count++` is read-modify-write, so two threads can both read 5 and both write 6. Use `AtomicInteger`/`LongAdder`, `synchronized`, or locks.

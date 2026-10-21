@@ -236,3 +236,33 @@ An SLI is a measured indicator of service health (e.g., the proportion of reques
 
 ### How do you migrate workloads from AWS or Azure to GCP?
 Assess and map services (compute, storage, databases, IAM), choose strategies per workload (rehost with Migrate to Virtual Machines, replatform to Cloud Run/GKE, refactor), migrate data with Database Migration Service and Storage Transfer Service, set up landing zone and networking first, run in parallel with testing, then cut over with DNS and rollback plans.
+
+# Scenario Questions
+
+## Beginner
+
+### Your Cloud Run service returns 403 when you call it from the browser. Why?
+The service requires **authentication**, the default for many organisation policies. For a public site, allow `allUsers` the `roles/run.invoker` role (if org policy permits). Otherwise call it with an identity token, or put it behind a load balancer with IAP. Also check ingress settings (internal only versus all).
+
+## Intermediate
+
+### A BigQuery query costs $50 each time it runs on a dashboard. How do you reduce it?
+- **Partition** tables (by date) and **cluster** them on filter columns.
+- Select only the columns you need (no `SELECT *`).
+- Always filter on the partition column.
+- Use materialised views or pre-aggregated tables.
+- Enable BI Engine or result caching.
+- Set per-user quotas, or move to capacity (slot) pricing for predictable spend.
+
+### Your service on GKE needs to read from Cloud Storage. How do you grant access without key files?
+Use **Workload Identity Federation for GKE**. Bind the Kubernetes ServiceAccount to an IAM principal (or a Google service account) with `roles/storage.objectViewer` on the bucket. Pods get short-lived credentials automatically. Never download JSON service-account keys.
+
+# Tricky Questions
+
+## Intermediate
+
+### Is a GCP VPC regional, like on AWS?
+No. A GCP **VPC is global** and its **subnets are regional**, so VMs in different regions can talk over internal IPs in the same VPC without peering. Firewall rules belong to the VPC and target instances by network tags or service accounts.
+
+### You grant a role at the project level, but a user still can't access a resource. What could block it?
+**Deny policies**, organisation policy constraints, VPC Service Controls perimeters, or IAM Conditions on the binding. Also check whether the API is enabled for the project and whether the user is using the right project or account (`gcloud config list`).

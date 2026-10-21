@@ -1,7 +1,8 @@
 # PrepStack — Interview Preparation Kit
 
 A learn-only, W3Schools-style study app for technical interviews. Every track goes
-**Beginner → Intermediate → Advanced** and ends with a bank of interview questions with model answers.
+**Beginner → Intermediate → Advanced** and ends with a bank of interview questions with model answers,
+plus scenario-based and tricky questions.
 
 ## Learning paths
 
@@ -12,6 +13,15 @@ Frontend Developer · Full-Stack JavaScript · Python Backend · Enterprise Full
 DevOps & Cloud · QA / SDET · RPA Developer · AI Engineer · 2-Week Interview Sprint
 
 Paths are defined in `content/paths.json`.
+
+## Scenario & tricky questions
+
+A separate 🧩 menu (`#/scenarios`) collects two kinds of practical questions from every track:
+
+- **🧩 Scenario**: a real production problem ("pods are in CrashLoopBackOff", "the API double-charges on retry"). How would you debug, design or fix it?
+- **🧠 Tricky**: predict the output, spot the bug, explain the gotcha (event-loop ordering, Python default arguments, SQL `NOT IN` with NULLs, `Integer` caching…).
+
+Filter them by track, level and type, mark them as mastered, find them in search, or mix them into flashcards. Each track also has its own page at `#/t/<track>/scenarios`.
 
 ## Tracks
 
@@ -42,6 +52,7 @@ You can also open `index.html` directly in a browser after running `npm run buil
 - Sidebar per track with lessons grouped by level, prev/next navigation, reading time
 - "Mark complete" for lessons and "Mark as mastered" for questions — progress saved in your browser
 - Interview Q&A per track with level filters, text filter and expand-all
+- 🧩 Scenario & tricky questions across all tracks, with track, level and type filters
 - 🧭 Learning paths with ordered steps, progress and "next in path" navigation
 - ⚡ Flashcard practice across any tracks/levels, focusing on questions you haven't mastered
 - Global search (`/` or `Ctrl+K`) across all lessons and questions
@@ -77,4 +88,14 @@ Lesson body in Markdown (code fences, tables, lists, > [!TIP] / [!WARN] / [!INTE
 ## Beginner
 ### Question text?
 Model answer.
+
+# Scenario Questions
+## Intermediate
+### Production problem: what would you do?
+Approach and answer.
+
+# Tricky Questions
+## Beginner
+### What does this print?
+Output and explanation.
 ```

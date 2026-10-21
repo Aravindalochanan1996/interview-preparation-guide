@@ -389,3 +389,48 @@ Patch regularly, use SSH keys with root login and passwords disabled, restrict a
 
 ### Explain how Linux namespaces and cgroups enable containers.
 Namespaces isolate what a process can see — its own PIDs, network stack, mounts, hostname, IPC and user IDs. Cgroups limit and account for resources like CPU, memory, I/O and PIDs. Combined with layered filesystems and security modules, they make an ordinary process behave like an isolated container.
+
+# Scenario Questions
+
+## Beginner
+
+### The server says "No space left on device", but `df -h` shows free space. What's going on?
+You've run out of **inodes** (millions of tiny files): check `df -i`. Or a **deleted file is still held open** by a process, so the space isn't freed until it closes: `lsof +L1` finds it, then restart the process. Also check that you're looking at the right mount point.
+
+### A script works when you run it, but fails from cron. Why?
+Cron runs with a **minimal environment**: a different `PATH`, no `.bashrc`/profile, a different working directory and `sh` instead of `bash`. Use absolute paths, set `PATH` and `SHELL` in the crontab, `cd` into the right directory, and redirect output to a log (`>> /var/log/job.log 2>&1`) to see the errors.
+
+## Intermediate
+
+### The server load average is 30 on a 4-core machine, but CPU usage is low. What do you check?
+Load average counts processes **waiting for I/O** (D state), not just those running on CPU. Check `top`/`htop` for `wa` (I/O wait), `iostat -x 1` for disk saturation, `vmstat 1` for swapping, and NFS mounts that hang. Find the processes with `iotop` or `ps -eo state,pid,cmd | grep '^D'`.
+
+### A web server is slow and you suspect memory. How do you confirm it?
+- `free -h`: remember that "available" matters, not "free", because Linux uses spare RAM for cache.
+- `vmstat 1`: watch `si/so` for swapping.
+- `dmesg | grep -i oom`: check for OOM kills.
+- `ps aux --sort=-%mem | head`: find the biggest processes.
+- `/proc/<pid>/status`: per-process detail.
+
+## Advanced
+
+### Production servers occasionally can't open new connections: "Too many open files". How do you fix it?
+The process has hit its **file-descriptor limit**. Check `ulimit -n` and `cat /proc/<pid>/limits`, and count open fds with `ls /proc/<pid>/fd | wc -l`. Raise the limit in the systemd unit (`LimitNOFILE=`) or `/etc/security/limits.conf`. Also look for fd leaks (sockets and files never closed), and tune `net.ipv4.ip_local_port_range` and TIME_WAIT reuse for outbound-heavy services.
+
+# Tricky Questions
+
+## Beginner
+
+### What's the difference? `cmd > out.txt 2>&1` vs `cmd 2>&1 > out.txt`
+Redirections are processed **left to right**. In the first, stdout goes to the file and then stderr is pointed at where stdout now points (the file), so both end up in the file. In the second, stderr is pointed at the *current* stdout (the terminal) and only then is stdout redirected to the file, so errors still appear on screen.
+
+### Why does `rm -rf $DIR/` scare reviewers?
+If `DIR` is empty or unset, the command becomes `rm -rf /`. Quote variables, and fail on unset ones with `set -u` or `${DIR:?DIR not set}`. Start scripts with `set -euo pipefail`.
+
+## Intermediate
+
+### What does this print? `count=0; cat file.txt | while read line; do count=$((count+1)); done; echo $count`
+**0**. Each part of a pipeline runs in a **subshell**, so the loop's `count` is lost. Use redirection instead, `while read -r line; do …; done < file.txt`, or `shopt -s lastpipe`.
+
+### `chmod 644` on a directory: can users `cd` into it?
+**No.** On directories, `x` (execute) means permission to traverse or enter, and `r` only lets you list names. Directories usually need `755` (or `750`), and files `644`.

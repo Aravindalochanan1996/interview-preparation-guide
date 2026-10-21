@@ -7,6 +7,9 @@
   const LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
   const PATHS = DATA.paths || [];
   const pathById = Object.fromEntries(PATHS.map((p) => [p.id, p]));
+  TOPICS.forEach((t) => (t.scenarios = t.scenarios || []));
+  const SCEN_TOPICS = TOPICS.filter((t) => t.scenarios.length);
+  const TYPES = { scenario: '🧩 Scenario', tricky: '🧠 Tricky' };
 
   const $ = (s, el = document) => el.querySelector(s);
   const main = $('#main');
@@ -24,11 +27,14 @@
   const mastered = new Set(store.get('mastered', []));
   const save = () => { store.set('done', [...done]); store.set('mastered', [...mastered]); };
 
+  // scenario/tricky ids live in their own namespace, so their mastery keys do too
+  const scenKey = (t, x) => `${t.id}/scenario/${x.id}`;
   const topicProgress = (t) => {
-    const total = t.lessons.length + t.questions.length;
+    const total = t.lessons.length + t.questions.length + t.scenarios.length;
     const d = t.lessons.filter((l) => done.has(`${t.id}/${l.slug}`)).length;
     const m = t.questions.filter((q) => mastered.has(`${t.id}/${q.id}`)).length;
-    return { lessons: d, questions: m, pct: total ? Math.round(((d + m) / total) * 100) : 0 };
+    const s = t.scenarios.filter((x) => mastered.has(scenKey(t, x))).length;
+    return { lessons: d, questions: m, scenarios: s, pct: total ? Math.round(((d + m + s) / total) * 100) : 0 };
   };
 
   // ---------- theme ----------
@@ -58,7 +64,7 @@
   // ---------- views ----------
   function homeSidebar() {
     const cats = groupBy(TOPICS, (t) => t.category);
-    return `<div class="side-group"><a class="side-link special" href="#/">⌂ Home</a><a class="side-link special" href="#/paths">🧭 Learning paths</a><a class="side-link special" href="#/practice">⚡ Flashcard practice</a></div>` +
+    return `<div class="side-group"><a class="side-link special" href="#/">⌂ Home</a><a class="side-link special" href="#/paths">🧭 Learning paths</a><a class="side-link special" href="#/scenarios">🧩 Scenario &amp; tricky questions</a><a class="side-link special" href="#/practice">⚡ Flashcard practice</a></div>` +
       Object.entries(cats).map(([c, ts]) => `<div class="side-group"><h3>${esc(c)}</h3>${ts.map((t) => {
         const p = topicProgress(t);
         return `<a class="side-link" href="#/t/${t.id}"><span class="dot" style="background:${t.color}"></span>${esc(t.title)}<span class="count">${p.pct}%</span></a>`;
@@ -68,6 +74,7 @@
   function renderHome() {
     const L = TOPICS.reduce((a, t) => a + t.lessons.length, 0);
     const Q = TOPICS.reduce((a, t) => a + t.questions.length, 0);
+    const S = TOPICS.reduce((a, t) => a + t.scenarios.length, 0);
     const doneCount = done.size, masteredCount = mastered.size;
     const cats = groupBy(TOPICS, (t) => t.category);
     sidebar.innerHTML = homeSidebar();
@@ -81,6 +88,7 @@
               ? `<a class="btn" href="${pathResumeLink(activePath())}">Continue ${esc(activePath().title)} →</a>`
               : `<a class="btn" href="#/paths">🧭 Choose a learning path</a>`}
             <a class="btn ghost" href="${resumeLink()}">${doneCount ? 'Continue last track' : 'Browse tracks'}</a>
+            <a class="btn ghost" href="#/scenarios">🧩 Scenario &amp; tricky Qs</a>
             <a class="btn ghost" href="#/practice">⚡ Flashcards</a>
           </div>
         </div>
@@ -88,9 +96,10 @@
           <div class="stat"><b>${TOPICS.length}</b><span>Tracks</span></div>
           <div class="stat"><b>${L}</b><span>Lessons</span></div>
           <div class="stat"><b>${Q}</b><span>Interview Q&amp;A</span></div>
+          <div class="stat"><b>${S}</b><span>Scenario &amp; tricky</span></div>
           <div class="stat"><b>${doneCount}</b><span>Lessons done</span></div>
           <div class="stat"><b>${masteredCount}</b><span>Q mastered</span></div>
-          <div class="stat"><b>${Math.round(((doneCount + masteredCount) / Math.max(1, L + Q)) * 100)}%</b><span>Overall</span></div>
+          <div class="stat"><b>${Math.round(((doneCount + masteredCount) / Math.max(1, L + Q + S)) * 100)}%</b><span>Overall</span></div>
         </div>
       </section>
 
@@ -102,6 +111,7 @@
         <div class="road-step"><h4>Read the lesson</h4><p>Go level by level. Beginner lessons fix the vocabulary interviewers expect you to use precisely.</p></div>
         <div class="road-step"><h4>Say it out loud</h4><p>After each lesson, explain the "Interview angle" box in your own words in under 60 seconds.</p></div>
         <div class="road-step"><h4>Drill the Q&amp;A</h4><p>Open the topic's interview questions. Answer before revealing; mark the ones you nail as mastered.</p></div>
+        <div class="road-step"><h4>Solve scenarios</h4><p>Work through 🧩 scenario and 🧠 tricky questions — production problems and predict-the-output puzzles that test real understanding.</p></div>
         <div class="road-step"><h4>Flashcards daily</h4><p>Use ⚡ Practice to mix questions across topics — it surfaces what you have not mastered yet.</p></div>
       </div>
 
@@ -229,8 +239,9 @@
       }).join('')}</div>`;
     }).join('');
     return `<div class="side-topic">${icon(t)}<div><h2>${esc(t.title)}</h2><small>${esc(t.category)}</small></div></div>
-      <div class="side-progress">${p.lessons}/${t.lessons.length} lessons · ${p.questions}/${t.questions.length} Q mastered<div class="progress"><span style="width:${p.pct}%"></span></div></div>
-      <div class="side-group"><a class="side-link special ${active === 'interview' ? 'active' : ''}" href="#/t/${t.id}/interview">🎯 Interview Questions<span class="count">${t.questions.length}</span></a></div>
+      <div class="side-progress">${p.lessons}/${t.lessons.length} lessons · ${p.questions + p.scenarios}/${t.questions.length + t.scenarios.length} Q mastered<div class="progress"><span style="width:${p.pct}%"></span></div></div>
+      <div class="side-group"><a class="side-link special ${active === 'interview' ? 'active' : ''}" href="#/t/${t.id}/interview">🎯 Interview Questions<span class="count">${t.questions.length}</span></a>${t.scenarios.length
+        ? `<a class="side-link special ${active === 'scenarios' ? 'active' : ''}" href="#/t/${t.id}/scenarios">🧩 Scenario &amp; Tricky<span class="count">${t.scenarios.length}</span></a>` : ''}</div>
       ${groups}
       <div class="side-group"><a class="side-link" href="#/">← All tracks</a></div>`;
   }
@@ -273,45 +284,50 @@
     enhance();
   }
 
-  function renderInterview(t) {
-    const state = store.get('qaFilter', { level: 'All', q: '' });
-    sidebar.innerHTML = topicSidebar(t, 'interview');
-    main.innerHTML = `<div class="content">
-      <div class="crumbs"><a href="#/">Home</a>›<a href="#/t/${t.id}">${esc(t.title)}</a>›<span>Interview questions</span></div>
-      <header class="article-head"><h1>${esc(t.title)} interview questions</h1></header>
-      <div class="article-meta"><span>${t.questions.length} questions with model answers</span><span>Answer out loud first, then reveal.</span></div>
-      <div class="toolbar" id="qaBar">
-        ${['All', ...LEVELS].map((L) => `<button class="chip ${state.level === L ? 'on' : ''}" data-level="${L}">${L} <span style="opacity:.7">${L === 'All' ? t.questions.length : t.questions.filter((q) => q.level === L).length}</span></button>`).join('')}
+  // Shared question-bank view: level (and type) chips, text filter, expand-all and mastery.
+  // items: [{ t, x, key }]; opts: { stateKey, types, grouped, onMaster }
+  function mountQA(box, items, opts) {
+    const state = { level: 'All', type: 'All', q: '', ...store.get(opts.stateKey, {}) };
+    const count = (f) => items.filter(f).length;
+    box.innerHTML = `<div class="toolbar" id="qaBar">
+        ${['All', ...LEVELS].map((L) => `<button class="chip ${state.level === L ? 'on' : ''}" data-level="${L}">${L} <span style="opacity:.7">${count((i) => L === 'All' || i.x.level === L)}</span></button>`).join('')}
+        ${opts.types ? ['All', ...Object.keys(TYPES)].map((T) => `<button class="chip ${state.type === T ? 'on' : ''}" data-type="${T}">${T === 'All' ? 'All types' : TYPES[T]} <span style="opacity:.7">${count((i) => T === 'All' || i.x.type === T)}</span></button>`).join('') : ''}
         <input class="filter-input" id="qaFilter" placeholder="Filter questions…" value="${esc(state.q)}">
         <button class="chip" id="expandAll">Expand all</button>
       </div>
-      <div id="qaList"></div>
-    </div>`;
+      <div id="qaList"></div>`;
+
+    const row = ({ t, x, key }, n) => `<details class="qa ${mastered.has(key) ? 'mastered' : ''}" data-key="${key}">
+        <summary><span class="num">${n}.</span><span class="qtext">${fmt(x.q)}</span>${x.type ? `<span class="tag">${TYPES[x.type]}</span>` : ''}${lvl(x.level)}<span class="chev">›</span></summary>
+        <div class="answer prose">${x.html}
+          <div class="answer-foot"><button class="btn small ${mastered.has(key) ? 'ghost' : ''}" data-master="${key}">${mastered.has(key) ? '✓ Mastered' : 'Mark as mastered'}</button></div>
+        </div></details>`;
 
     const draw = () => {
       const q = state.q.trim().toLowerCase();
-      const list = t.questions.filter((x) => (state.level === 'All' || x.level === state.level) && (!q || (x.q + ' ' + x.text).toLowerCase().includes(q)));
-      $('#qaList').innerHTML = list.length ? list.map((x, i) => {
-        const key = `${t.id}/${x.id}`;
-        return `<details class="qa ${mastered.has(key) ? 'mastered' : ''}" data-key="${key}">
-          <summary><span class="num">${i + 1}.</span><span class="qtext">${fmt(x.q)}</span>${lvl(x.level)}<span class="chev">›</span></summary>
-          <div class="answer prose">${x.html}
-            <div class="answer-foot"><button class="btn small ${mastered.has(key) ? 'ghost' : ''}" data-master="${key}">${mastered.has(key) ? '✓ Mastered' : 'Mark as mastered'}</button></div>
-          </div></details>`;
-      }).join('') : '<div class="empty">No questions match.</div>';
+      const list = items.filter(({ x }) => (state.level === 'All' || x.level === state.level) &&
+        (!opts.types || state.type === 'All' || x.type === state.type) &&
+        (!q || (x.q + ' ' + x.text).toLowerCase().includes(q)));
+      let n = 0;
+      $('#qaList').innerHTML = !list.length ? '<div class="empty">No questions match.</div>'
+        : opts.grouped
+          ? Object.values(groupBy(list, (i) => i.t.id)).map((g) => `<div class="qa-group">
+              <h2>${icon(g[0].t, 'small')}<a href="#/t/${g[0].t.id}/scenarios">${esc(g[0].t.title)}</a><span>${g.length}</span></h2>
+              ${g.map((i) => row(i, ++n)).join('')}</div>`).join('')
+          : list.map((i) => row(i, ++n)).join('');
       enhance();
     };
     draw();
 
     $('#qaBar').addEventListener('click', (e) => {
-      const b = e.target.closest('[data-level]');
-      if (b) {
-        state.level = b.dataset.level; store.set('qaFilter', state);
-        [...document.querySelectorAll('[data-level]')].forEach((c) => c.classList.toggle('on', c === b));
-        draw();
-      }
+      const b = e.target.closest('[data-level],[data-type]');
+      if (!b) return;
+      const attr = b.dataset.level ? 'level' : 'type';
+      state[attr] = b.dataset[attr]; store.set(opts.stateKey, state);
+      box.querySelectorAll(`[data-${attr}]`).forEach((c) => c.classList.toggle('on', c === b));
+      draw();
     });
-    $('#qaFilter').addEventListener('input', (e) => { state.q = e.target.value; store.set('qaFilter', state); draw(); });
+    $('#qaFilter').addEventListener('input', (e) => { state.q = e.target.value; store.set(opts.stateKey, state); draw(); });
     $('#expandAll').addEventListener('click', (e) => {
       const all = [...document.querySelectorAll('.qa')];
       const open = !all.every((d) => d.open);
@@ -328,24 +344,86 @@
       d.classList.toggle('mastered', mastered.has(key));
       b.classList.toggle('ghost', mastered.has(key));
       b.textContent = mastered.has(key) ? '✓ Mastered' : 'Mark as mastered';
-      sidebar.innerHTML = topicSidebar(t, 'interview');
+      opts.onMaster && opts.onMaster();
     });
+  }
+
+  function renderInterview(t) {
+    sidebar.innerHTML = topicSidebar(t, 'interview');
+    main.innerHTML = `<div class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<a href="#/t/${t.id}">${esc(t.title)}</a>›<span>Interview questions</span></div>
+      <header class="article-head"><h1>${esc(t.title)} interview questions</h1></header>
+      <div class="article-meta"><span>${t.questions.length} questions with model answers</span><span>Answer out loud first, then reveal.</span>${t.scenarios.length ? `<a href="#/t/${t.id}/scenarios">🧩 ${t.scenarios.length} scenario &amp; tricky questions →</a>` : ''}</div>
+      <div id="qaWrap"></div>
+    </div>`;
+    mountQA($('#qaWrap'), t.questions.map((x) => ({ t, x, key: `${t.id}/${x.id}` })), {
+      stateKey: 'qaFilter', onMaster: () => (sidebar.innerHTML = topicSidebar(t, 'interview')),
+    });
+  }
+
+  function renderTopicScenarios(t) {
+    if (!t.scenarios.length) return renderInterview(t);
+    sidebar.innerHTML = topicSidebar(t, 'scenarios');
+    main.innerHTML = `<div class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<a href="#/scenarios">Scenario questions</a>›<span>${esc(t.title)}</span></div>
+      <header class="article-head"><h1>${esc(t.title)} scenario &amp; tricky questions</h1></header>
+      <div class="article-meta"><span>${t.scenarios.filter((x) => x.type === 'scenario').length} real-world scenarios · ${t.scenarios.filter((x) => x.type === 'tricky').length} tricky puzzles</span><span>Work it out before you reveal the answer.</span></div>
+      <div id="qaWrap"></div>
+    </div>`;
+    mountQA($('#qaWrap'), t.scenarios.map((x) => ({ t, x, key: scenKey(t, x) })), {
+      stateKey: 'scenFilter', types: true, onMaster: () => (sidebar.innerHTML = topicSidebar(t, 'scenarios')),
+    });
+  }
+
+  // Scenario hub: every track's scenario + tricky questions in one place, filterable by track.
+  function renderScenarios() {
+    const sel = store.get('scenTopics', []).filter((id) => byId[id]);
+    const total = SCEN_TOPICS.reduce((a, t) => a + t.scenarios.length, 0);
+    sidebar.innerHTML = homeSidebar();
+    main.innerHTML = `<div class="wide">
+      <div class="crumbs"><a href="#/">Home</a>›<span>Scenario questions</span></div>
+      <header class="article-head"><h1>🧩 Scenario &amp; tricky questions</h1></header>
+      <div class="article-meta"><span>${total} questions across ${SCEN_TOPICS.length} tracks.</span><span><b>🧩 Scenario</b> — a real production problem: how would you debug, design or fix it?</span><span><b>🧠 Tricky</b> — predict the output, spot the bug, explain the gotcha.</span></div>
+      <div class="toolbar" id="sTopics">
+        <button class="chip ${sel.length ? '' : 'on'}" data-t="">All tracks</button>
+        ${SCEN_TOPICS.map((t) => `<button class="chip ${sel.includes(t.id) ? 'on' : ''}" data-t="${t.id}">${esc(t.short)}</button>`).join('')}
+      </div>
+      <div id="qaWrap"></div>
+    </div>`;
+    const draw = () => {
+      const ts = sel.length ? SCEN_TOPICS.filter((t) => sel.includes(t.id)) : SCEN_TOPICS;
+      mountQA($('#qaWrap'), ts.flatMap((t) => t.scenarios.map((x) => ({ t, x, key: scenKey(t, x) }))), { stateKey: 'scenHub', types: true, grouped: true });
+    };
+    $('#sTopics').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-t]'); if (!b) return;
+      const id = b.dataset.t;
+      if (!id) sel.length = 0;
+      else if (sel.includes(id)) sel.splice(sel.indexOf(id), 1);
+      else sel.push(id);
+      document.querySelectorAll('#sTopics .chip').forEach((c) => c.classList.toggle('on', c.dataset.t ? sel.includes(c.dataset.t) : !sel.length));
+      store.set('scenTopics', sel); draw();
+    });
+    draw();
   }
 
   // ---------- flashcard practice ----------
   function renderPractice() {
-    const cfg = store.get('practice', { topics: [], level: 'All', unmasteredOnly: true });
+    const cfg = { topics: [], level: 'All', unmasteredOnly: true, scenarios: false, ...store.get('practice', {}) };
     let session = { seen: 0, known: 0 };
     sidebar.innerHTML = homeSidebar();
 
     const pool = () => {
       const ts = cfg.topics.length ? TOPICS.filter((t) => cfg.topics.includes(t.id)) : TOPICS;
       const out = [];
-      ts.forEach((t) => t.questions.forEach((q) => {
+      const add = (t, q, key) => {
         if (cfg.level !== 'All' && q.level !== cfg.level) return;
-        if (cfg.unmasteredOnly && mastered.has(`${t.id}/${q.id}`)) return;
-        out.push({ t, q });
-      }));
+        if (cfg.unmasteredOnly && mastered.has(key)) return;
+        out.push({ t, q, key });
+      };
+      ts.forEach((t) => {
+        t.questions.forEach((q) => add(t, q, `${t.id}/${q.id}`));
+        if (cfg.scenarios) t.scenarios.forEach((q) => add(t, q, scenKey(t, q)));
+      });
       return out;
     };
 
@@ -359,7 +437,8 @@
       </div>
       <div class="toolbar" id="pLevels">
         ${['All', ...LEVELS].map((L) => `<button class="chip ${cfg.level === L ? 'on' : ''}" data-l="${L}">${L}</button>`).join('')}
-        <label style="font-size:14px;display:flex;gap:6px;align-items:center;margin-left:auto"><input type="checkbox" id="pUnm" ${cfg.unmasteredOnly ? 'checked' : ''}> Only questions I haven't mastered</label>
+        <label style="font-size:14px;display:flex;gap:6px;align-items:center;margin-left:auto"><input type="checkbox" id="pScen" ${cfg.scenarios ? 'checked' : ''}> Include scenario &amp; tricky</label>
+        <label style="font-size:14px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="pUnm" ${cfg.unmasteredOnly ? 'checked' : ''}> Only questions I haven't mastered</label>
       </div>
       <div id="flash"></div>
     </div>`;
@@ -371,10 +450,9 @@
         box.innerHTML = `<div class="flash"><div class="empty">🎉 Nothing left in this selection. Pick more tracks or include mastered questions.</div></div>`;
         return;
       }
-      const { t, q } = p[Math.floor(Math.random() * p.length)];
-      const key = `${t.id}/${q.id}`;
+      const { t, q, key } = p[Math.floor(Math.random() * p.length)];
       box.innerHTML = `<div class="flash">
-        <div class="flash-meta">${icon(t, '')}<span>${esc(t.title)}</span>${lvl(q.level)}<span style="margin-left:auto">${p.length} in pool</span></div>
+        <div class="flash-meta">${icon(t, '')}<span>${esc(t.title)}</span>${q.type ? `<span class="tag">${TYPES[q.type]}</span>` : ''}${lvl(q.level)}<span style="margin-left:auto">${p.length} in pool</span></div>
         <div class="q">${fmt(q.q)}</div>
         <div class="flash-actions" id="revealRow"><button class="btn" id="reveal">Reveal answer <kbd>Space</kbd></button><button class="btn ghost" id="skip">Skip</button></div>
         <div class="answer prose" id="ans" hidden>${q.html}
@@ -405,6 +483,7 @@
       document.querySelectorAll('#pLevels .chip').forEach((c) => c.classList.toggle('on', c === b));
       store.set('practice', cfg); next();
     });
+    $('#pScen').addEventListener('change', (e) => { cfg.scenarios = e.target.checked; store.set('practice', cfg); next(); });
     $('#pUnm').addEventListener('change', (e) => { cfg.unmasteredOnly = e.target.checked; store.set('practice', cfg); next(); });
     next();
   }
@@ -414,6 +493,7 @@
   TOPICS.forEach((t) => {
     t.lessons.forEach((l) => index.push({ kind: 'Lesson', t, title: l.title.replace(/`/g, ''), level: l.level, href: `#/t/${t.id}/${l.slug}`, hay: (l.title + ' ' + t.title).toLowerCase().replace(/`/g, ''), body: l.text.toLowerCase(), raw: l.text }));
     t.questions.forEach((q) => index.push({ kind: 'Question', t, title: q.q.replace(/`/g, ''), level: q.level, href: `#/t/${t.id}/interview`, qid: q.id, hay: (q.q + ' ' + t.title).toLowerCase().replace(/`/g, ''), body: q.text.toLowerCase(), raw: q.text }));
+    t.scenarios.forEach((q) => index.push({ kind: q.type === 'tricky' ? 'Tricky' : 'Scenario', t, title: q.q.replace(/`/g, ''), level: q.level, href: `#/t/${t.id}/scenarios`, qid: q.id, hay: (q.q + ' ' + t.title).toLowerCase().replace(/`/g, ''), body: q.text.toLowerCase(), raw: q.text }));
   });
   const modal = $('#searchModal'), input = $('#searchInput'), results = $('#searchResults');
   let sel = 0, hits = [];
@@ -424,7 +504,7 @@
   function drawResults() {
     const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length) {
-      results.innerHTML = `<div class="empty">Type to search ${index.length} lessons and questions. Try “closure”, “useEffect”, “ORM”, “pod”.</div>`;
+      results.innerHTML = `<div class="empty">Type to search ${index.length} lessons, interview, scenario and tricky questions. Try “closure”, “useEffect”, “ORM”, “pod”.</div>`;
       hits = []; return;
     }
     hits = index.map((r) => {
@@ -499,15 +579,20 @@
     document.body.classList.remove('nav-open');
     const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
     let activeTopic = null;
-    if (parts[0] === 't' && byId[parts[1]]) {
-      const t = byId[parts[1]];
-      activeTopic = t.id;
-      if (parts[2] === 'interview') renderInterview(t);
-      else renderLesson(t, parts[2] || firstUnread(t));
-    } else if (parts[0] === 'practice') renderPractice();
-    else if (parts[0] === 'paths' && pathById[parts[1]]) renderPath(pathById[parts[1]]);
-    else if (parts[0] === 'paths') renderPaths();
-    else renderHome();
+    const render = () => {
+      if (parts[0] === 't' && byId[parts[1]]) {
+        const t = byId[parts[1]];
+        activeTopic = t.id;
+        if (parts[2] === 'interview') renderInterview(t);
+        else if (parts[2] === 'scenarios') renderTopicScenarios(t);
+        else renderLesson(t, parts[2] || firstUnread(t));
+      } else if (parts[0] === 'practice') renderPractice();
+      else if (parts[0] === 'scenarios') renderScenarios();
+        else if (parts[0] === 'paths' && pathById[parts[1]]) renderPath(pathById[parts[1]]);
+      else if (parts[0] === 'paths') renderPaths();
+      else renderHome();
+    };
+    render();
 
     document.querySelectorAll('#topnav a').forEach((a) => a.classList.toggle('active', a.dataset.id === activeTopic));
     const act = $(`#topnav a[data-id="${activeTopic}"]`); act && act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -516,9 +601,9 @@
     if (pendingQuestion) {
       const d = main.querySelector(`.qa[data-key$="/${CSS.escape(pendingQuestion)}"]`);
       if (!d) {
-        // question may be hidden by a level filter — reset filter and retry
-        store.set('qaFilter', { level: 'All', q: '' });
-        if (parts[2] === 'interview') { renderInterview(byId[parts[1]]); }
+        // question may be hidden by a filter — reset filters and retry
+        ['qaFilter', 'scenFilter'].forEach((k) => store.set(k, {}));
+        render();
       }
       const d2 = main.querySelector(`.qa[data-key$="/${CSS.escape(pendingQuestion)}"]`);
       if (d2) { d2.open = true; enhance(); setTimeout(() => d2.scrollIntoView({ block: 'start' }), 30); }

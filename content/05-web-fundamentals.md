@@ -346,3 +346,62 @@ Keep refresh tokens in `HttpOnly; Secure; SameSite=Strict` cookies scoped to the
 
 ### What is Content Security Policy and how do you roll it out?
 An HTTP header that restricts sources for scripts, styles, images, frames, connections, etc. Start with `Content-Security-Policy-Report-Only` and a `report-to` endpoint to discover violations, remove inline scripts or add nonces/`strict-dynamic`, then enforce. Key directives: `default-src`, `script-src`, `connect-src`, `frame-ancestors`, `object-src 'none'`, `base-uri`.
+
+# Scenario Questions
+
+## Beginner
+
+### Your front end on `app.example.com` calls `api.example.com` and the browser shows a CORS error. Postman works fine. Why, and how do you fix it?
+CORS is enforced by **browsers**, not servers, so Postman ignores it. The API must answer with `Access-Control-Allow-Origin: https://app.example.com`. If it uses cookies or credentials, it also needs `Access-Control-Allow-Credentials: true`, and the origin can't be `*`. Non-simple requests (JSON body, custom headers) send an `OPTIONS` **preflight** first, which must be answered with `Allow-Methods`/`Allow-Headers`. In development you can proxy through the dev server instead.
+
+### Users stay logged in on a shared computer after closing the browser. What do you check?
+- Session cookies with a long `Max-Age`/`Expires` ("remember me" turned on by default).
+- Refresh tokens kept forever in `localStorage`.
+- No server-side session expiry, or logout that doesn't revoke the session or refresh token.
+
+Use short session lifetimes, server-side revocation, an idle timeout, and make "remember me" opt-in.
+
+## Intermediate
+
+### After a deploy, some users see a broken page until they hard-refresh. What's going on?
+Their cached `index.html` references old asset files (or new HTML references assets they don't have yet). Fix it with a caching strategy:
+- `index.html` gets `Cache-Control: no-cache`, so it is revalidated on every request.
+- Fingerprinted assets (`app.3f9a.js`) get `Cache-Control: public, max-age=31536000, immutable`.
+- Keep old assets available for a while after a deploy.
+- If you use a service worker, version it and prompt users to reload.
+
+### A security review flags that your app is vulnerable to CSRF. You use cookie sessions. What do you do?
+- Set the cookie to `SameSite=Lax` (or `Strict`), plus `Secure` and `HttpOnly`.
+- Require a **CSRF token** (synchronizer or double-submit) on state-changing requests.
+- Never change state on `GET`.
+- Check the `Origin`/`Referer` header for unsafe methods.
+
+Bearer tokens in an `Authorization` header aren't sent automatically by the browser, so they're not vulnerable to CSRF, but tokens stored in JavaScript-readable storage are exposed to XSS.
+
+## Advanced
+
+### Your API is hit by credential-stuffing attacks: millions of login attempts from many IPs. How do you defend it?
+- **Rate limit** by account, IP and device fingerprint, with progressive delays.
+- Use **bot detection** (a CAPTCHA or challenge after failures) and a WAF.
+- Check passwords against breach lists (HIBP k-anonymity), and require MFA.
+- Return generic error messages and use constant-time comparisons.
+- Monitor failure-rate anomalies and alert on them.
+- Lock out softly (step-up verification) rather than hard-locking, so attackers can't lock real users out.
+
+# Tricky Questions
+
+## Beginner
+
+### Is `PUT` idempotent? Is `POST`? Is `PATCH`?
+`PUT` **is** idempotent: sending the same full replacement twice leaves the same state. `POST` is **not**: it may create two resources. `PATCH` is **not guaranteed** to be: `{ "op": "increment" }` isn't. To make POST safe to retry, use an **Idempotency-Key** header that the server deduplicates on.
+
+### Which status code should "logged in, but not allowed to delete this" return: 401 or 403?
+**403 Forbidden.** **401 Unauthorized** really means *unauthenticated*: no credentials or invalid credentials, so log in. Some APIs return **404** to hide that the resource exists.
+
+## Intermediate
+
+### A cookie is set with `Domain=example.com; Path=/app; SameSite=Lax`. Is it sent on a `fetch` POST from `evil.com` to `example.com/app/transfer`?
+**No.** `SameSite=Lax` cookies are sent on cross-site **top-level GET navigations** only, not on cross-site POSTs, iframes or `fetch`. That's why Lax is a solid CSRF defence. With `SameSite=None; Secure` the cookie would be sent.
+
+### Your JWT is signed with HS256. An attacker changes the header to `"alg": "none"`. What happens?
+A vulnerable library accepts the unsigned token as valid. Always **pin the expected algorithm** when verifying (`jwt.verify(token, key, { algorithms: ['HS256'] })`) and reject `none`. The related attack is RS256→HS256 confusion, where the public key gets used as an HMAC secret.

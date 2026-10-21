@@ -607,3 +607,90 @@ A build-time compiler that analyses components and hooks and automatically inser
 
 ### How would you design a large-scale React application architecture?
 Feature-based folder structure, a shared design system, clear separation of server state (TanStack Query/RSC) and client state (Zustand/Redux), routing with code splitting, typed API layer (TypeScript + Zod/OpenAPI), error boundaries per route, testing pyramid (RTL + MSW + Playwright), CI with lint/type-check, performance budgets, and monitoring (Sentry, Web Vitals). Consider a framework like Next.js for SSR/RSC and micro-frontends only if team scale demands it.
+
+# Scenario Questions
+
+## Beginner
+
+### A form input loses focus after every keystroke. What's the cause?
+The input is being **unmounted and remounted** on each render. Common reasons:
+- A component is defined *inside* another component, so it's a new type every render.
+- The list `key` changes on every render (`key={Math.random()}`).
+- A conditional swaps between two different wrappers.
+
+Move component definitions to module scope and use stable keys.
+
+### Clicking "+1" three times quickly in a handler with `setCount(count + 1); setCount(count + 1);` only adds 1 per click. Why?
+Both calls read the same `count` from that render's closure, so they both set `count + 1`. Use the **functional updater** `setCount(c => c + 1)` when the next state depends on the previous one.
+
+## Intermediate
+
+### Your `useEffect` that fetches data runs in an infinite loop. How do you fix it?
+The effect updates state that's in its own dependency array, or a dependency is a new object or function on every render (`options = {}` inline, an unmemoised callback). Fix it by:
+- depending on primitives (`userId`)
+- moving the object inside the effect, or wrapping it in `useMemo`/`useCallback`
+- not setting state that feeds back into the dependencies
+
+Better still, use a data library (TanStack Query, SWR), which handles caching, deduplication and race conditions.
+
+### A 10,000-row table makes typing in the filter box laggy. How do you make it fast?
+1. **Virtualize** the list (TanStack Virtual, react-window) so only visible rows render.
+2. Keep the input responsive with `useDeferredValue(filter)` or `startTransition`.
+3. Memoize rows (`React.memo`) with stable props, or let the React Compiler do it.
+4. Do the filtering in `useMemo`, or on the server with pagination.
+
+Profile with React DevTools Profiler before and after.
+
+## Advanced
+
+### After a release, the Next.js page logs "Hydration failed" in production for some users. How do you debug it?
+Find what differs between server and client output:
+- dates or timezones, `Math.random()`
+- `window` or `localStorage` read during render
+- browser extensions injecting DOM
+- invalid nesting (`<div>` inside `<p>`)
+- A/B flags evaluated differently on server and client
+
+Reproduce with the user's locale or timezone. Fix with deterministic rendering, by moving client-only values into `useEffect` or a client component, or by passing server-computed values down as props.
+
+### Your app's global Context causes every component to re-render on each keystroke. How do you restructure it?
+Every consumer re-renders whenever the context **value** changes. Options:
+- **Split contexts** by update frequency (state and dispatch apart).
+- Memoize the value object.
+- Keep fast-changing state local, or in a store with **selectors** (Zustand, Redux, `useSyncExternalStore`) so components subscribe only to the slice they use.
+
+# Tricky Questions
+
+## Beginner
+
+### What renders when `items` is an empty array? `{items.length && <List items={items} />}`
+A literal **`0`** on the screen. `0 && x` evaluates to `0`, and React renders numbers. Use `items.length > 0 && …` or a ternary.
+
+### What gets logged?
+```jsx
+function Counter() {
+  const [n, setN] = useState(0);
+  const click = () => { setN(n + 1); console.log(n); };
+  return <button onClick={click}>{n}</button>;
+}
+```
+`0` on the first click, `1` on the second, and so on: always the **old** value. State updates are applied on the next render, and `n` in this closure is a constant snapshot.
+
+## Intermediate
+
+### Why does this effect log the stale value forever?
+```jsx
+useEffect(() => {
+  const id = setInterval(() => console.log(count), 1000);
+  return () => clearInterval(id);
+}, []);
+```
+The empty dependency array means the effect runs once and captures `count` from the first render, so it's a **stale closure**. Fix it by adding `count` to the dependencies (the interval restarts), by keeping the latest value in a ref, or with `useEffectEvent`.
+
+### In development, your effect's fetch runs twice and the API logs two calls. Is this a bug?
+It's **Strict Mode** in React 18+ development: it mounts, unmounts and re-mounts components to surface effects that lack cleanup. Production calls it once. Don't disable it. Make the effect safe to repeat: abort the request in the cleanup, or use a data library that deduplicates requests.
+
+## Advanced
+
+### Items in a list are deleted, and the wrong row's input keeps the typed text. Why?
+The list uses `key={index}`. After a delete, the indexes shift and React reuses the DOM and state of the old index for a different item. Use a **stable unique id** as the key.

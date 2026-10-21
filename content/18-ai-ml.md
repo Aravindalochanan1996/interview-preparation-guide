@@ -384,3 +384,48 @@ Data drift: the distribution of input features changes (new customer segment). C
 
 ### How do you explain a model's predictions?
 Global: feature importance, permutation importance, partial dependence plots. Local: SHAP values (game-theory attributions per prediction), LIME (local surrogate models), counterfactual explanations. Prefer inherently interpretable models when regulations require it.
+
+# Scenario Questions
+
+## Beginner
+
+### Your fraud model has 99.5% accuracy, but the business says it catches almost no fraud. What's wrong?
+The classes are **imbalanced**: if 0.5% of transactions are fraud, predicting "not fraud" every time scores 99.5% accuracy. Use precision, recall, F1, PR-AUC and a confusion matrix. Handle the imbalance with class weights, resampling (SMOTE or undersampling) and **threshold tuning** based on the business cost of false negatives versus false positives.
+
+## Intermediate
+
+### The model scored 0.95 AUC offline but performs poorly in production. What could explain it?
+- **Data leakage**: features that wouldn't be available at prediction time, a target-derived feature, or a random split on time-series data.
+- **Train/serve skew**: the feature pipeline differs between training and serving.
+- **Distribution shift**: new users, seasonality.
+- A label definition mismatch.
+
+Fixes: time-based splits, a shared feature store or pipeline, and monitoring of the input and prediction distributions (PSI, KL divergence).
+
+### Training loss keeps going down, but validation loss starts rising after epoch 5. What do you do?
+That's **overfitting**. Use early stopping on validation loss, regularisation (L2/weight decay, dropout), more or augmented data, a simpler model, or cross-validation to check. Make sure the validation set reflects production data.
+
+## Advanced
+
+### You have to retrain and deploy a model weekly with no regressions. Design the MLOps pipeline.
+1. Versioned data and features (DVC, a feature store), and experiment tracking (MLflow).
+2. A scheduled training pipeline (Airflow, Kubeflow, SageMaker Pipelines) with data validation (Great Expectations).
+3. An evaluation gate against the current model on a fixed holdout set and on slices.
+4. A model registry with staging and production stages.
+5. Deploy with shadow or canary traffic.
+6. Monitor drift, latency and business KPIs, and roll back automatically.
+
+# Tricky Questions
+
+## Beginner
+
+### You scale features with `StandardScaler().fit(X)` on the full dataset, then split into train and test. What's the problem?
+**Leakage.** The test set's mean and variance influenced training preprocessing, so test scores come out optimistic. Fit transformers on the **training** data only, ideally inside a `Pipeline` so cross-validation does this correctly per fold.
+
+## Intermediate
+
+### Your model's precision is 0.9 and recall is 0.1. Is it a good model?
+It depends on the cost, but it's usually not. When it flags something it's right 90% of the time, but it misses 90% of the positives. For cancer screening or fraud, recall matters more, so lower the threshold. For spam filtering, precision can matter more. Always tie the metric to the business cost.
+
+### Why might adding more features make a k-NN model worse?
+The **curse of dimensionality**: distances become less meaningful as dimensions grow, and irrelevant or noisy features drown out the useful ones. Use feature selection, dimensionality reduction (PCA) and scaling, because k-NN is sensitive to feature scale.

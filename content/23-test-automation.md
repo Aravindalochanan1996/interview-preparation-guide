@@ -599,3 +599,54 @@ Contract tests verify that each service meets the API expectations of its consum
 
 ### How would you automate a flow involving an OTP or email verification?
 In test environments use a test mode or fixed OTP, retrieve the OTP from a test inbox API (Mailosaur, MailHog) or a test-only backend endpoint, or seed verified users via API. Never try to bypass production security; CAPTCHAs should be disabled or use test keys in non-production environments.
+
+# Scenario Questions
+
+## Beginner
+
+### A Selenium test fails randomly with "element not found" and passes on rerun. How do you make it stable?
+That's a **timing** problem. Replace `Thread.sleep` with **explicit waits** for a condition (`ExpectedConditions.elementToBeClickable`), or move to Playwright, whose auto-waiting locators handle this. Use stable selectors (`data-testid`, roles) instead of brittle XPath, and wait for app signals (network idle, a spinner gone) rather than fixed time.
+
+## Intermediate
+
+### Your E2E suite takes 90 minutes, so developers ignore it. How do you fix it?
+- **Parallelise** with Playwright workers or a Selenium Grid, and shard across CI machines.
+- Move most checks down to API and component tests, keeping E2E for critical journeys.
+- Set up test data via the API instead of the UI, and reuse logged-in state (`storageState`).
+- Delete or merge redundant tests.
+- Run a smoke subset on PRs and the full suite nightly or in the merge queue.
+
+### Tests pass locally but fail in CI. What differences do you check?
+- Headless versus headed browser, viewport size, timezone and locale.
+- Different data or environment variables, and missing secrets.
+- Slower CI machines exposing timing bugs.
+- Test order dependency and shared state when running in parallel.
+- Browser and driver versions.
+
+Collect traces, screenshots and videos in CI (the Playwright trace viewer) to see what actually happened.
+
+## Advanced
+
+### Design a test automation framework for a product with web, mobile and API layers.
+- **Layers**: test specs → page/screen objects or a screenplay layer → a core layer (drivers, API clients, config, data builders, reporting).
+- Shared API clients for setup and verification.
+- Environment config via env vars or files.
+- Parallel-safe test data (unique per test).
+- Tags for smoke and regression runs.
+- CI integration with retries only for diagnosis.
+- Rich reports (Allure or the Playwright HTML report).
+- Contract tests between services.
+- Clear ownership and code review for test code.
+
+# Tricky Questions
+
+## Intermediate
+
+### Why is this Playwright assertion flaky, and what's the fix? `expect(await page.locator('.count').textContent()).toBe('3')`
+It reads the text **once**, possibly before the UI updates. Use the web-first assertion `await expect(page.locator('.count')).toHaveText('3')`, which retries until the timeout.
+
+### Is it OK to add automatic retries to fix flaky tests?
+Retries hide the symptom, and a flaky test might be a real race condition in the product. Use retries only to **collect evidence** (traces on the first retry), track flaky tests and quarantine them with an owner and a deadline, then fix the root cause (waits, test isolation, test data).
+
+### Should E2E tests share one logged-in user and one database record?
+No. Shared state makes tests **order-dependent** and breaks parallel runs. Give each test its own data (created through the API, with unique ids), isolated browser contexts, and cleanup or disposable environments. Reuse only immutable setup such as an auth `storageState` per worker.

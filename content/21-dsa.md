@@ -513,3 +513,43 @@ It finds shortest paths from a source in a graph with non-negative edge weights.
 
 ### What is Union-Find and what optimisations make it fast?
 A disjoint-set structure supporting `find` (which set an element belongs to) and `union` (merge sets). Path compression flattens trees during find, and union by rank/size attaches smaller trees under larger ones, giving near-constant amortised time (inverse Ackermann). Used for connected components, cycle detection and Kruskal's MST.
+
+# Scenario Questions
+
+## Intermediate
+
+### You need the top 10 most frequent search terms from a stream of millions of queries per hour. Which data structures do you use?
+- A **hash map** for counts, plus a **min-heap of size k**: O(n log k).
+- For an unbounded stream with limited memory, an approximate **Count-Min Sketch** plus a heap (heavy hitters).
+- For a sliding window, bucket counts per minute and expire old buckets.
+
+### An autocomplete feature must suggest words by prefix as the user types. What structure fits?
+A **trie** (prefix tree). Each node can keep the top-k completions, ranked by frequency, so suggestions come back in O(prefix length). For huge vocabularies, use a compressed trie (radix tree) or a sorted array with binary search on the prefix range.
+
+## Advanced
+
+### You need to detect whether a user has seen an article before, across billions of articles, with little memory. What do you use?
+A **Bloom filter**. It's a bit array with k hash functions: "definitely not seen" is always correct, and "maybe seen" has a tunable false-positive rate. It can't delete entries (use a counting Bloom or cuckoo filter if you need that). Back it with an exact store when a false positive would be costly.
+
+# Tricky Questions
+
+## Beginner
+
+### What's the time complexity? `for (let i = 1; i < n; i *= 2) for (let j = 0; j < i; j++) work();`
+**O(n)**, not O(n log n). The inner loop runs 1 + 2 + 4 + … + n/2 times, a geometric series that sums to less than 2n.
+
+### Is this binary search correct? `mid = (lo + hi) / 2`
+In languages with fixed-width integers (Java, C++), `lo + hi` can **overflow** for large indices. Use `lo + (hi - lo) / 2`. Also check the loop condition (`lo <= hi` versus `lo < hi`) and the updates (`hi = mid - 1` versus `hi = mid`). Mixing them up causes infinite loops or skipped elements.
+
+## Intermediate
+
+### What's the complexity of `str += char` inside a loop of n iterations in Java or Python?
+It can be **O(n²)**, because strings are immutable and each concatenation copies the whole string. Use `StringBuilder` (Java) or `''.join(parts)` (Python). CPython sometimes optimises in-place `+=`, but don't rely on it.
+
+### Why can recursive Fibonacci with memoization still crash for n = 100,000?
+Recursion depth: each call adds a stack frame, so you hit Python's recursion limit or a stack overflow. Use the **bottom-up** iterative version (two variables, O(1) space), or increase the limit and accept the risk.
+
+## Advanced
+
+### Quicksort is O(n log n) on average. When does it degrade, and how do libraries avoid it?
+It degrades to **O(n²)** when pivots are consistently bad: already sorted input with a first or last-element pivot, or many duplicates. Libraries use random or median-of-three pivots, three-way partitioning for duplicates, and **introsort** (which falls back to heapsort past a recursion depth). Java sorts objects with TimSort, which is stable and O(n log n) in the worst case.

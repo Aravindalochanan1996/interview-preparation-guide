@@ -484,3 +484,67 @@ Use a durable broker (Redis/BullMQ, RabbitMQ, SQS, Kafka). Make jobs idempotent,
 
 ### How would you scale a Node.js WebSocket server horizontally?
 Run multiple instances behind a load balancer with sticky sessions (or use a protocol that tolerates reconnection), share pub/sub messages through Redis/NATS (Socket.IO Redis adapter), keep connection state external, set heartbeats/timeouts, and scale on connection count/CPU metrics.
+
+# Scenario Questions
+
+## Beginner
+
+### Your Express API hangs forever on some requests: no response, no error. What do you look for?
+A code path that never calls `res.send`, `res.json` or `next()`. That might be a missing `return` after an `if`, a middleware that forgets `next()`, or an `async` handler whose rejection isn't caught (Express 4 doesn't catch async errors, so wrap handlers or upgrade to Express 5). Add request timeouts and log the route and duration.
+
+## Intermediate
+
+### API latency jumps from 20 ms to 2 s whenever one endpoint generates a report. Why, and how do you fix it?
+The report does **CPU-heavy synchronous work** (large JSON processing, crypto, image resizing, `fs.readFileSync`), which blocks the single event loop for **every** request. Fixes:
+- move the work to `worker_threads` or a separate job queue (BullMQ)
+- stream the data instead of loading it all
+- use async APIs
+
+Spot it with `clinic doctor`, `--prof`, or event-loop lag metrics (`perf_hooks.monitorEventLoopDelay`).
+
+### Memory grows steadily in production until the container is OOM-killed. How do you find the leak?
+Take heap snapshots (`--inspect` with Chrome DevTools, or `heapdump`) at intervals and compare retained objects. Typical leaks:
+- module-level caches or Maps with no eviction
+- event listeners added on each request (watch for the `MaxListenersExceededWarning`)
+- closures held by timers
+- unbounded queues
+
+Fix it with an LRU cache, by removing listeners, and with `--max-old-space-size` set to match container limits.
+
+## Advanced
+
+### You must process a 5 GB file upload and save it to S3 without running out of memory. How?
+**Stream** it end to end. Pipe the request stream (busboy) into the S3 multipart `Upload`, using `stream.pipeline` for error handling and **backpressure**, so memory stays constant. Don't buffer with `multer` memory storage. Validate size and type as the bytes flow, and support resumable uploads (presigned multipart URLs that go straight to S3) for big files.
+
+# Tricky Questions
+
+## Intermediate
+
+### Predict the output order in Node.js.
+```js
+setTimeout(() => console.log('timeout'), 0);
+setImmediate(() => console.log('immediate'));
+process.nextTick(() => console.log('nextTick'));
+Promise.resolve().then(() => console.log('promise'));
+console.log('sync');
+```
+`sync nextTick promise`, then `timeout` and `immediate` in **either order** when run from the main module, because it depends on loop start-up timing. Inside an I/O callback, `setImmediate` always runs before the timeout. `process.nextTick` runs before promise microtasks.
+
+### What does this print, and why?
+```js
+const fs = require('fs');
+fs.readFile(__filename, () => {
+  setTimeout(() => console.log('timeout'), 0);
+  setImmediate(() => console.log('immediate'));
+});
+```
+Always `immediate` then `timeout`. The callback runs in the **poll** phase. The next phase is **check** (setImmediate), and timers run on the following loop iteration.
+
+## Advanced
+
+### Why can `await`ing inside `array.forEach` cause bugs?
+```js
+items.forEach(async (i) => { await save(i); });
+console.log('all saved');
+```
+`forEach` ignores the returned promises, so 'all saved' logs before anything is saved, and rejections go unhandled. Use `for...of` with `await` for sequential work, or `await Promise.all(items.map(save))` for concurrent work (limit concurrency with `p-limit`).

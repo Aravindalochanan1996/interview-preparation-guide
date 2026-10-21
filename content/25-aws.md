@@ -373,3 +373,49 @@ API Gateway with a Cognito JWT authorizer invokes a Lambda that validates and wr
 
 ### DynamoDB — how do you design the data model?
 Start from access patterns, choose partition keys with high cardinality to spread load, use sort keys for hierarchical queries and ranges, use GSIs for alternate access patterns, consider single-table design to fetch related items in one query, avoid scans, and use TTL, streams and transactions where appropriate.
+
+# Scenario Questions
+
+## Beginner
+
+### Your EC2 instance's web server is running, but you can't reach it from the browser. What do you check?
+- The **security group** allows inbound 80/443 from your IP or `0.0.0.0/0`.
+- The instance is in a **public subnet** whose route table points to an Internet Gateway, and it has a public IP or Elastic IP.
+- Network ACLs allow the traffic in **and** out (they're stateless, so return ephemeral ports must be open).
+- The OS firewall is open, and the app listens on `0.0.0.0`.
+
+### You got a surprise $3,000 AWS bill. How do you find the cause and prevent it next time?
+Use **Cost Explorer**, grouped by service, region and usage type, to find it. Typical culprits: NAT Gateway data processing, idle large instances, unattached EBS volumes or old snapshots, data transfer, or a leaked access key mining crypto. Prevent it with **AWS Budgets** alerts, Cost Anomaly Detection, tagging policies, and lifecycle rules.
+
+## Intermediate
+
+### A Lambda function times out when calling an RDS database in a VPC. What's going on?
+- The Lambda's security group isn't allowed by the RDS security group.
+- The Lambda is in a VPC subnet with no route to the internet, so calls to other AWS APIs hang (add a NAT gateway or VPC endpoints).
+- Too many concurrent Lambdas exhaust DB connections. Use **RDS Proxy**, and reuse connections outside the handler.
+
+### You need to let an app running on EC2 read one S3 bucket. How do you grant access?
+Attach an **IAM role** (instance profile) whose policy allows `s3:GetObject` on `arn:aws:s3:::bucket/*` and `s3:ListBucket` on the bucket. Never put access keys on the instance. The SDK picks up temporary credentials automatically. Add a bucket policy or VPC endpoint condition if you need tighter control.
+
+## Advanced
+
+### Design a highly available web app on AWS that survives an Availability Zone failure.
+- An **ALB** across at least 2 AZs, in front of an **Auto Scaling Group** (or ECS/EKS) spread across those AZs.
+- **RDS Multi-AZ** (or Aurora with replicas).
+- ElastiCache with replication.
+- S3 and CloudFront for static assets.
+- Route 53 health checks, and stateless app servers (sessions in Redis or DynamoDB).
+- For regional disaster recovery: cross-region replication and a pilot-light or warm-standby setup.
+
+# Tricky Questions
+
+## Intermediate
+
+### An IAM policy allows `s3:*`, but a bucket policy has an explicit `Deny`. Can the user read the bucket?
+**No.** In AWS policy evaluation an **explicit Deny always wins** over any Allow, whether from identity policies, resource policies, permission boundaries or SCPs. Without any Allow the default is implicit deny.
+
+### Is S3 eventually consistent? Can you read a file right after writing it?
+Since December 2020, S3 gives **strong read-after-write consistency** for PUTs and DELETEs of objects, plus list consistency. Old interview answers about eventual consistency are out of date. Cross-region replication is still asynchronous.
+
+### Do security groups or NACLs need rules for return traffic?
+**Security groups are stateful**: return traffic for an allowed connection is allowed automatically. **NACLs are stateless**: you must allow both directions, including ephemeral ports 1024–65535 for responses.

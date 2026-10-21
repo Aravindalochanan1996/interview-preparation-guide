@@ -511,3 +511,54 @@ Use sync endpoints (threadpool) for moderately blocking calls, `run_in_executor`
 
 ### FastAPI vs Django REST Framework — how do you choose?
 FastAPI suits API-only microservices, async-heavy workloads and ML serving, with lightweight structure and automatic docs. DRF suits projects needing Django's ORM, admin, auth and ecosystem, or full-stack apps with a mature, conventional structure. Team expertise and existing stack often decide.
+
+# Scenario Questions
+
+## Beginner
+
+### Your FastAPI endpoint returns 422 Unprocessable Entity, but the request "looks right". How do you debug it?
+422 means **request validation failed**. Read the `detail` array: it lists each `loc` (`body`, `query`, `path`) and the error. Common causes:
+- sending form data or a query param where the endpoint expects a JSON body
+- a wrong field name or type
+- a missing `Content-Type: application/json`
+- an endpoint parameter declared as a query param when you meant the body (a plain `str` parameter that's not in the path is a query param)
+
+## Intermediate
+
+### Throughput collapses under load even though the endpoints are `async def`. Why?
+A **blocking call** inside `async def` (`requests.get`, a sync DB driver, `time.sleep`, CPU-heavy work) freezes the event loop for every request. Fixes:
+- use async libraries (`httpx.AsyncClient`, asyncpg, async SQLAlchemy)
+- declare the endpoint as plain `def`, so FastAPI runs it in a threadpool
+- `await run_in_threadpool(...)` or `asyncio.to_thread`
+- offload heavy work to a worker
+
+### How do you make every endpoint require a valid JWT, except `/health` and `/login`?
+Create a dependency that decodes and validates the token (`OAuth2PasswordBearer` plus PyJWT, with algorithm, expiry and audience checks), and attach it to routers with `APIRouter(dependencies=[Depends(get_current_user)])` instead of each route. Keep public routes on a separate router. Return 401 with `WWW-Authenticate`, and add scope or role checks in sub-dependencies.
+
+## Advanced
+
+### Database connections run out ("too many clients") when you scale FastAPI to 20 pods. How do you fix it?
+Each pod's pool (pool_size + max_overflow) multiplied by workers and pods exceeds Postgres `max_connections`. Shrink the per-process pools, put **PgBouncer** (transaction pooling) in front, make sure sessions are closed (a `yield` dependency with `finally`), and use one engine per process, not one per request.
+
+# Tricky Questions
+
+## Intermediate
+
+### In which order do these run, and when does the cleanup happen?
+```python
+async def get_db():
+    db = Session()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+FastAPI runs the code before `yield` before the endpoint and injects `db`. The `finally` runs **after the endpoint returns**, as part of finishing the response. Its timing relative to background tasks has changed between FastAPI versions, so never rely on a yield-managed session inside a `BackgroundTask`. Open a new session inside the task instead.
+
+### Why does this endpoint leak `password_hash` to clients?
+```python
+@app.get("/users/{id}")
+def get_user(id: int) -> dict:
+    return db.get_user(id).__dict__
+```
+Returning a raw dict, or the ORM model without a `response_model`, serialises every field. Declare `response_model=UserOut` (or a return annotation `-> UserOut`) with only the public fields. FastAPI filters the output through it.

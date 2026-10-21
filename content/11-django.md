@@ -534,3 +534,47 @@ Django runs under ASGI with async views, middleware and async ORM APIs. Use asyn
 
 ### Explain how you would structure a large Django codebase.
 Domain-focused apps, a custom user model, service and selector layers for business logic and queries, thin views/serializers, split settings, typed code with django-stubs, factories and pytest for tests, Celery tasks per domain, API versioning, and enforced boundaries between apps to avoid circular imports.
+
+# Scenario Questions
+
+## Beginner
+
+### A list page with 50 orders makes 101 SQL queries. How do you find and fix it?
+This is the **N+1 problem**: you loop over orders and touch `order.customer` and `order.items`. Find it with django-debug-toolbar, or `assertNumQueries` in tests. Fix it with `select_related('customer')` for FK/one-to-one (a JOIN) and `prefetch_related('items')` for reverse FK/M2M (a second query). In DRF, put these on the viewset's `get_queryset`.
+
+## Intermediate
+
+### Sending a welcome email in the signup view makes signup take 4 seconds. How do you fix it?
+Move the slow side effect into a **background task** (Celery or RQ with Redis, or Django 6's tasks framework). Use `transaction.on_commit(lambda: send_welcome.delay(user.id))` so the task only runs after the user row is committed. Pass ids, not model instances, and make the task retryable and idempotent.
+
+### Two users buy the last item in stock at the same moment and you oversell. How do you prevent it?
+It's a race condition between read and write. Options:
+- `select_for_update()` inside `transaction.atomic()` to lock the row
+- an atomic update `Product.objects.filter(id=pid, stock__gt=0).update(stock=F('stock') - 1)`, checking the number of affected rows
+- a DB constraint `CheckConstraint(stock__gte=0)` as a safety net
+
+## Advanced
+
+### You need to add a non-null column to a 50-million-row table with zero downtime. How?
+Do it as an **expand–contract** migration:
+1. Add the column as nullable, or with a database-level default (Django 5's `db_default`) so it doesn't rewrite the table.
+2. Deploy code that writes the new field.
+3. Backfill in batches in a separate data migration or script.
+4. Add the `NOT NULL` constraint, on Postgres via `NOT VALID` and then validate.
+
+Avoid long locks, and use `SeparateDatabaseAndState` where needed.
+
+# Tricky Questions
+
+## Beginner
+
+### Does `Order.objects.filter(status='paid')` hit the database?
+**No.** QuerySets are **lazy**. The query runs when you evaluate it: iterate, `list()`, `len()`, slice with a step, `bool()`, or print it. Evaluated querysets cache their results, but `.filter()` on them builds a new, unevaluated queryset.
+
+## Intermediate
+
+### Why didn't `post_save` fire for these rows? `Product.objects.filter(cat=1).update(price=10)`
+`QuerySet.update()` and `bulk_create`/`bulk_update` run SQL directly and **skip `save()` and signals**. If you rely on signals or overridden `save()` logic, loop and save (which is slower), or move the logic into an explicit service function.
+
+### What's wrong with `price = models.FloatField()` for money?
+Floats can't represent decimal fractions exactly (`0.1 + 0.2`), so totals drift. Use `DecimalField(max_digits=12, decimal_places=2)` or store integer cents.

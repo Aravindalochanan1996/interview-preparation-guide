@@ -234,7 +234,7 @@ for (let i = 0; i < 3; i++) setTimeout(() => console.log(i));  // 0 1 2
 ```js
 const user = {
   name: 'Asha',
-  regular() { return this.name; },
+  regular() { return this?.name; },
   arrow: () => this?.name,          // `this` of module scope → undefined
   delayed() { setTimeout(() => console.log(this.name), 0); }, // arrow keeps `this`
 };
@@ -694,3 +694,147 @@ Shallow equality compares top-level properties with `===`; deep equality recursi
 
 ### What is the difference between `Object.freeze`, `Object.seal` and `Object.preventExtensions`?
 `preventExtensions`: no new properties. `seal`: no add/delete, but existing props are writable. `freeze`: no add/delete/modify — fully read-only. All are **shallow**; nested objects remain mutable unless frozen recursively.
+
+# Scenario Questions
+
+## Beginner
+
+### A button's click handler fires twice on every click. How do you track down why?
+Check where the listener is attached. The usual causes are:
+- `addEventListener` runs on every render or route change without a matching `removeEventListener`, so listeners pile up.
+- The handler sits on a parent and a child, and the event bubbles to both. Use `event.stopPropagation()`, or better, a single delegated listener.
+- In React 18 dev, Strict Mode runs effects twice. Clean up in the effect's return function.
+
+Confirm it in DevTools → Elements → **Event Listeners**, or with `getEventListeners(el)` in the Chrome console.
+
+### A user types "10" and "5" into two inputs and your total shows "105". What happened and how do you fix it?
+`input.value` is always a string, so `+` concatenates. Convert explicitly, `Number(a) + Number(b)` or `parseFloat`, and check the result with `Number.isNaN` before you use it. For money, work in integer cents (or `Intl.NumberFormat` for display) so floating-point errors don't creep in.
+
+## Intermediate
+
+### Your search box fires an API call on every keystroke and results arrive out of order. How do you fix it?
+1. **Debounce** the input (about 300 ms) so a request goes out only after typing pauses.
+2. **Cancel stale requests** with `AbortController`. Abort the previous request before you send the next one.
+3. **Ignore late responses**: only render a response if it belongs to the latest query.
+
+```js
+let ctrl;
+const search = debounce(async (q) => {
+  ctrl?.abort();
+  ctrl = new AbortController();
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+    render(await res.json());
+  } catch (e) { if (e.name !== 'AbortError') throw e; }
+}, 300);
+```
+
+### A single-page app gets slower the longer it stays open and memory keeps climbing. How do you investigate?
+Take heap snapshots in DevTools → Memory: one snapshot, repeat the action (open and close a view), take another, then compare. Look for **detached DOM nodes** and objects whose count keeps growing. Common culprits:
+- event listeners or `setInterval` never removed
+- caches or `Map`s that grow forever (switch to `WeakMap` or an LRU)
+- closures holding large objects
+- third-party widgets that are never destroyed
+
+Fix it by adding teardown logic (AbortController `signal` on listeners, clearing timers), then check that the heap returns to its baseline.
+
+## Advanced
+
+### You need to process a 200 MB CSV in the browser without freezing the UI. What's your approach?
+- Read it as a **stream** (`file.stream()` plus `TextDecoderStream`) instead of `file.text()`, so the whole file never sits in memory.
+- Parse in a **Web Worker** so the main thread stays responsive. Post progress messages back to the page.
+- Use transferable objects (`ArrayBuffer`) to avoid copying data between threads.
+- Batch results and render with virtualization.
+- If you have to stay on the main thread, chunk the work and yield with `scheduler.yield()` or `setTimeout`.
+
+### Users report that a page shows another user's data for a split second after logout and login. What could cause it?
+Usually it's cached state that survives the session change:
+- a module-level singleton or store (Redux, a query cache) that isn't reset on logout
+- an HTTP cache, or a service worker serving a cached authenticated response
+- a request still in flight from the old session that resolves after the new login
+
+Fixes: clear stores and query caches on logout, key caches by user id, abort in-flight requests, send `Cache-Control: no-store`/`private` on personal API responses, and make the service worker skip authenticated routes.
+
+# Tricky Questions
+
+## Beginner
+
+### What does this print? `console.log(typeof null, typeof NaN, typeof [], typeof function(){})`
+`object number object function`. `typeof null === 'object'` is a historical bug in the language. `NaN` is a number. Arrays are objects, so use `Array.isArray` to detect them. Functions are the only callable objects and get their own `"function"` result.
+
+### What is the output? `console.log(0.1 + 0.2 === 0.3, [] + [], [] + {}, 1 + '2' - 1)`
+- `false`: binary floating point gives `0.30000000000000004`. Compare with `Math.abs(a - b) < Number.EPSILON`.
+- `""`: both arrays convert to empty strings.
+- `"[object Object]"`: the object converts to that string.
+- `11`: `1 + '2'` is `'12'`, then `-` forces numeric conversion, so `12 - 1 = 11`.
+
+### What does this print, and why?
+```js
+for (var i = 0; i < 3; i++) setTimeout(() => console.log(i), 0);
+for (let j = 0; j < 3; j++) setTimeout(() => console.log(j), 0);
+```
+`3 3 3` and then `0 1 2`. `var` is function-scoped, so all three callbacks share one `i`, which is `3` by the time they run. `let` creates a new binding on every iteration, so each callback captures its own `j`.
+
+## Intermediate
+
+### Predict the output order of this event-loop puzzle.
+```js
+console.log('1');
+setTimeout(() => console.log('2'), 0);
+Promise.resolve().then(() => {
+  console.log('3');
+  setTimeout(() => console.log('4'), 0);
+}).then(() => console.log('5'));
+queueMicrotask(() => console.log('6'));
+(async () => {
+  console.log('7');
+  await null;
+  console.log('8');
+})();
+console.log('9');
+```
+**Output: `1 7 9 3 6 8 5 2 4`**
+
+1. Synchronous code runs first: `1`. The `setTimeout` queues macrotask **2**. The `.then` callback is queued as a microtask (**3**). `queueMicrotask` queues **6**. The async IIFE runs synchronously up to its first `await`, printing `7`, and `await null` queues its continuation (**8**) as a microtask. Then `9`.
+2. The microtask queue drains in FIFO order: `3`, which also queues macrotask **4**. Once that `.then` resolves, the chained `.then` (**5**) joins the end of the queue. Then `6`, `8`, `5`.
+3. Macrotasks run in order: `2`, then `4`.
+
+Rules to remember: **sync → all microtasks (including ones queued while draining) → one macrotask → microtasks again**. `await` code is synchronous until the first `await`.
+
+### What does this log?
+```js
+const obj = {
+  name: 'A',
+  regular() { return this?.name; },
+  arrow: () => this?.name,
+  delayed() { setTimeout(function () { console.log(this?.name); }, 0); },
+};
+const f = obj.regular;
+console.log(obj.regular(), obj.arrow(), f());
+obj.delayed();
+```
+Running as an ES module (strict mode, top-level `this` is `undefined`): `A undefined undefined`. The delayed log prints `undefined` in Node, where `this` is the Timeout object. In a browser `this` is `window`, so it prints `window.name`, usually an empty string. Arrow functions take `this` from the enclosing scope (the module here), not from the object. `f()` loses its receiver, so `this` is `undefined`. Without the `?.` it would throw a `TypeError`. The plain `function` passed to `setTimeout` never sees `obj` as `this`. Use an arrow function or `.bind(this)` to keep it.
+
+### What is the output, and what is the bug?
+```js
+const nums = ['1', '7', '11'].map(parseInt);
+console.log(nums);
+```
+`[1, NaN, 3]`. `map` passes `(value, index, array)`, so the calls are `parseInt('1', 0)` → 1 (radix 0 means auto), `parseInt('7', 1)` → NaN (radix 1 is invalid), and `parseInt('11', 2)` → 3 (binary). Fix it with `.map(Number)` or `.map((s) => parseInt(s, 10))`.
+
+## Advanced
+
+### What does this print?
+```js
+async function a() { console.log('a1'); await b(); console.log('a2'); }
+async function b() { console.log('b'); }
+console.log('start');
+setTimeout(() => console.log('timeout'), 0);
+a();
+new Promise((r) => { console.log('p1'); r(); }).then(() => console.log('p2'));
+console.log('end');
+```
+`start a1 b p1 end a2 p2 timeout`. `a()` runs synchronously: it prints `a1`, calls `b()` which prints `b`, and the `await` queues `a2` as a microtask. The Promise executor runs synchronously (`p1`) and its `.then` queues `p2` after `a2`. After `end`, the microtasks drain in order, then the timeout runs.
+
+### Why does `[NaN].includes(NaN)` differ from `[NaN].indexOf(NaN)`, and what about `Object.is`?
+`[NaN].includes(NaN)` is `true` because `includes` uses **SameValueZero**. `[NaN].indexOf(NaN)` is `-1` because `indexOf` uses `===`, and `NaN !== NaN`. `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false` (SameValue). `===` gives the opposite answer for both pairs.

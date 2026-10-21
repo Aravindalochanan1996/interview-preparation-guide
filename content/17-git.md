@@ -300,3 +300,57 @@ Blue/green runs two complete environments and switches all traffic at once, with
 
 ### How do you design a secure CI/CD pipeline?
 Least-privilege, short-lived credentials (OIDC instead of static keys), protected branches with required reviews and checks, pinned action/image versions, SAST/SCA/secret/image scanning gates, signed artifacts and provenance (SLSA), isolated runners, approval gates for production, and audit logs.
+
+# Scenario Questions
+
+## Beginner
+
+### You committed to `main` instead of a feature branch (not pushed yet). How do you move the commit?
+```bash
+git branch feature/login      # new branch keeps the commit
+git reset --hard HEAD~1        # move main back one commit
+git switch feature/login
+```
+If you already pushed, don't rewrite `main`. Revert the commit there, or ask the team first.
+
+### You accidentally committed a `.env` file with an API key and pushed it. What do you do?
+1. **Rotate the key immediately.** Assume it's compromised, because history is public and gets scraped by bots.
+2. Remove it from history (`git filter-repo --path .env --invert-paths`) and force-push, in coordination with the team.
+3. Add `.env` to `.gitignore`.
+4. Turn on secret scanning or push protection, and a pre-commit hook (gitleaks).
+
+## Intermediate
+
+### A bug appeared somewhere in the last 200 commits. How do you find the commit that introduced it, quickly?
+`git bisect`: mark a known good and a known bad commit, and Git binary-searches, so 200 commits take about 8 steps. Automate it with `git bisect run npm test -- some.spec`.
+
+### Your CI pipeline takes 40 minutes. How do you cut it down?
+- Cache dependencies and build outputs, and use Docker layer caching.
+- **Parallelise** test shards.
+- Run only the tests affected by the change (Nx, Turborepo, path filters).
+- Fail fast: lint and type-check first.
+- Use bigger runners where they pay off.
+- Split slow E2E tests into a separate nightly or merge-queue stage.
+
+## Advanced
+
+### Long-lived feature branches cause painful merges every sprint. What process would you propose?
+**Trunk-based development**: short-lived branches (under 1–2 days), small PRs, **feature flags** to hide incomplete work, a required CI status check and a merge queue, and continuous deploys with progressive rollout. Release branches only when needed.
+
+# Tricky Questions
+
+## Beginner
+
+### What's the difference between `git reset --soft`, `--mixed` and `--hard` HEAD~1?
+All three move HEAD back one commit:
+- `--soft` keeps the changes **staged**.
+- `--mixed` (the default) keeps them in the working tree, **unstaged**.
+- `--hard` **discards** them. You can recover them via `git reflog` for a while.
+
+## Intermediate
+
+### You ran `git reset --hard` and lost a commit. Is it gone?
+Usually not. `git reflog` lists where HEAD has been, so you can `git reset --hard <sha>` or `git branch rescue <sha>`. Unreachable commits survive until garbage collection (about 30–90 days by default). Uncommitted work that was never staged is truly lost.
+
+### `git revert` vs `git reset` on a shared branch: which one and why?
+Use **revert**. It adds a new commit that undoes the change, so history stays intact for everyone. Reset rewrites history, so collaborators' branches diverge and a force-push can wipe their work. Note that reverting a merge commit needs `-m 1`, and re-merging the same branch later requires reverting the revert.

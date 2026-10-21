@@ -409,3 +409,46 @@ Track and quarantine them so they don't block pipelines, then fix root causes: r
 
 ### Shift-left vs shift-right testing?
 Shift-left moves testing earlier — requirement reviews, TDD, static analysis, unit and API tests in CI — to find defects when they're cheapest to fix. Shift-right tests in production safely — monitoring, canary releases, feature flags, A/B tests and chaos engineering — to learn from real usage and improve resilience. Mature teams do both.
+
+# Scenario Questions
+
+## Beginner
+
+### The release is tomorrow and you only have time to test 20% of the features. How do you choose?
+Use **risk-based testing**. Prioritise by business impact (payments, login, checkout), by likelihood of failure (recently changed code, complex areas, past bug hotspots) and by usage analytics. Run the smoke and critical-path tests first, then the regression tests around the changes. Tell stakeholders exactly what wasn't covered, so the residual risk is known.
+
+### A developer says "works on my machine" about a bug you found. How do you handle it?
+Make the bug **reproducible and objective**: exact steps, test data, environment (browser, OS, build number, feature flags), expected versus actual result, screenshots or video, console and network logs, and a request ID. Compare environments (config, data, versions). Pair with the developer for a few minutes; it's faster than going back and forth on a ticket.
+
+## Intermediate
+
+### Production bugs keep escaping even though test coverage is 85%. What would you change?
+Coverage shows which lines ran, not whether the behaviour was checked. Look at the escaped bugs to find **why** they escaped (missing edge cases, integration gaps, environment differences, bad test data). Then add tests at the right level (contract and integration tests), use mutation testing to check test strength, put exploratory sessions on risky features, and add production monitoring and canaries.
+
+## Advanced
+
+### How would you set up a QA strategy for a team moving from monthly releases to daily deploys?
+- **Shift left**: acceptance criteria and test cases in refinement, a definition of done that includes automated tests.
+- A test pyramid in CI (unit, then API/contract, then a few E2E tests) gating every merge.
+- Feature flags with canary or progressive rollout.
+- Synthetic monitoring and alerting in production.
+- Exploratory testing time for new features.
+- Track quality metrics: escaped defects, change failure rate, MTTR.
+
+# Tricky Questions
+
+## Beginner
+
+### A login field accepts 6–12 characters. Which lengths do you test with boundary value analysis?
+5, 6, 12 and 13 at minimum (just outside and on each boundary), often plus 7 and 11, and one mid-range value from the valid **equivalence partition** (say 9). Also test empty input, whitespace-only input and multi-byte characters.
+
+## Intermediate
+
+### Severity vs priority: give an example of a high-severity, low-priority bug and of the reverse.
+- **High severity, low priority**: the app crashes on a rarely used legacy report that one internal user runs once a year.
+- **Low severity, high priority**: the company logo is misspelled on the home page the day before a big launch.
+
+Severity is technical impact; priority is how urgently the business needs it fixed.
+
+### Is 100% test coverage proof that the code is bug-free?
+No. It proves every line ran, not that the assertions are meaningful or that every input combination, integration, concurrency case or requirement was tested. A test with no assertions still adds coverage. Mutation testing measures whether the tests actually catch faults.

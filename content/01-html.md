@@ -497,3 +497,53 @@ It makes an element and its descendants non-focusable, non-clickable and hidden 
 
 ### How would you build an accessible modal?
 Prefer native `<dialog>` with `showModal()`: it renders in the top layer, makes the rest of the page inert, closes on Escape, and supports `::backdrop`. Also give it an accessible name (`aria-labelledby`), move focus to the first meaningful element, and return focus to the trigger on close.
+
+# Scenario Questions
+
+## Beginner
+
+### Clicking "Search" reloads the whole page instead of running your JavaScript. Why?
+A `<button>` inside a `<form>` defaults to `type="submit"`, so clicking it submits the form and navigates away. Either handle the form's `submit` event and call `event.preventDefault()` (better, because it also covers pressing Enter), or set `type="button"` on buttons that shouldn't submit.
+
+### An accessibility audit says your icon-only buttons have "no accessible name". How do you fix it?
+A screen reader announces just "button". Give the button a name: `<button aria-label="Close dialog">` with `aria-hidden="true"` on the decorative SVG, or include visually hidden text (`<span class="sr-only">Close</span>`). Use a real `<button>`, not a clickable `<div>`, so you get keyboard focus and Enter/Space handling for free.
+
+## Intermediate
+
+### Your landing page has a poor Largest Contentful Paint (LCP) because of the hero image. What do you change in the HTML?
+- Don't lazy-load the hero image. Add `fetchpriority="high"`, and `<link rel="preload" as="image">` if the browser discovers it late (for example from CSS).
+- Serve a responsive, modern format with `<picture>`/`srcset` and `sizes` (AVIF/WebP).
+- Set `width` and `height` to reserve space, which also prevents layout shift.
+- Defer or async non-critical scripts so they don't block the parser.
+
+## Advanced
+
+### A third-party chat widget slows down your page and sometimes breaks your styles. How do you isolate it?
+- Load it **after** the critical content (`defer`, on interaction, or with `requestIdleCallback`).
+- Isolate its DOM and styles in a **Shadow DOM**, or in an `<iframe>` with `sandbox` and a restrictive `allow` attribute.
+- Restrict what it can load with a **Content-Security-Policy**.
+- Use `rel="preconnect"` to its origin only if you load it early. Measure the effect in Lighthouse and in your Real User Monitoring (RUM) data.
+
+# Tricky Questions
+
+## Beginner
+
+### What does the browser render for `<p>Hello <div>World</div></p>`?
+Two paragraphs and a div: `<p>Hello </p><div>World</div><p></p>`. A `<p>` can't contain block content, so the parser closes it implicitly when it meets `<div>`, and the stray `</p>` creates an empty paragraph. This is a classic cause of React hydration mismatches.
+
+### Is `<input disabled>` value sent when the form submits? What about `readonly`?
+A **disabled** control is not submitted and can't receive focus. A **readonly** control is submitted and can receive focus. Use `readonly` when you want the user to see a value that must still reach the server.
+
+## Intermediate
+
+### What happens to scripts here, and in what order do they run?
+```html
+<script src="a.js" async></script>
+<script src="b.js" defer></script>
+<script src="c.js" defer></script>
+<script src="d.js"></script>
+```
+`d.js` blocks the parser and runs as soon as it downloads. `a.js` runs whenever it finishes downloading, in any order relative to the others. `b.js` and then `c.js` run **in document order** after parsing finishes, just before `DOMContentLoaded`. Use `defer` for app code that depends on the DOM and on other scripts, and `async` for independent scripts such as analytics.
+
+### Two `id="price"` elements exist on the page. What do `getElementById` and the `label for` attribute do?
+The page is invalid HTML, but browsers tolerate it. `getElementById` returns the **first** match, and `<label for="price">` binds to the first match too, so the second field loses its label. Keep ids unique. This matters for accessibility and for test selectors.

@@ -429,3 +429,42 @@ Enable user workload monitoring, expose `/metrics` from apps, define ServiceMoni
 
 ### How do you install OpenShift in an air-gapped environment?
 Mirror release images and required operator catalogs to an internal registry with `oc-mirror`, configure `imageContentSourcePolicy`/`ImageDigestMirrorSet`, provide the mirror registry CA and pull secret in `install-config.yaml`, use the agent-based or UPI installer, and disable default online catalog sources in favour of mirrored ones.
+
+# Scenario Questions
+
+## Beginner
+
+### An image that runs fine on plain Kubernetes fails on OpenShift with "permission denied". Why?
+OpenShift's `restricted-v2` SCC runs containers as a **random, non-root UID** that belongs to group 0. Images that write to root-owned directories, or bind to ports below 1024, fail. Fix the image: `chgrp -R 0 /app && chmod -R g=u /app`, listen on 8080, and don't assume a fixed UID. Granting `anyuid` should be a last resort.
+
+## Intermediate
+
+### Your Route returns "Application is not available". How do you debug it?
+Work along the chain **Route → Service → Endpoints → Pod**:
+- Does the Route point at the right Service and `targetPort`?
+- Does the Service have endpoints (`oc get endpoints`)?
+- Are the pods ready (readiness probe)?
+- Does the TLS termination type match the app (edge, passthrough or reencrypt)?
+- Is a NetworkPolicy blocking the router namespace?
+
+### Builds work in dev but your team wants promotion across dev → test → prod without rebuilding. How do you set that up?
+Build once, then **promote the same image** by tag or digest. Use `oc tag` on ImageStreams between projects, or push to an external registry and update the GitOps manifests per environment (Argo CD / OpenShift GitOps with kustomize overlays). Keep config in ConfigMaps and Secrets per environment, not baked into the image.
+
+## Advanced
+
+### You need to give one team self-service namespaces while enforcing quotas and security. How?
+- Use a **project template** with a default ResourceQuota, LimitRange, NetworkPolicy (deny-by-default) and RoleBindings.
+- Use RBAC groups synced from LDAP or OIDC.
+- Enforce policies with Gatekeeper or Kyverno (or OpenShift's admission plugins).
+- Keep restricted SCCs by default.
+- Let Argo CD AppProjects scope which clusters and namespaces each team can deploy to.
+
+# Tricky Questions
+
+## Intermediate
+
+### Is a DeploymentConfig the same as a Deployment?
+No. **DeploymentConfig** is OpenShift-specific: it has triggers on ImageStream changes and lifecycle hooks, and it's **deprecated** since 4.14. Kubernetes **Deployments** are the recommended choice; use image-trigger annotations if you need automatic rollouts when the image changes.
+
+### `oc new-app` created a BuildConfig and you pushed a fix, but nothing rebuilt. Why?
+A BuildConfig only rebuilds on configured **triggers**: a GitHub or generic webhook, an ImageChange of the builder image, or a ConfigChange. A git push doesn't reach the cluster unless a webhook is set up (and the cluster is reachable from the git host). Start a build manually with `oc start-build`.

@@ -427,3 +427,50 @@ With a locking backend, the second run fails to acquire the lock and waits or er
 
 ### How do you refactor Terraform code without destroying resources?
 Use `moved` blocks (or `terraform state mv`) to map old addresses to new ones when renaming resources or moving them into modules, verify with `terraform plan` that no destroy/create occurs, and apply. Use `removed` blocks to stop managing resources without destroying them.
+
+# Scenario Questions
+
+## Beginner
+
+### Two engineers ran `terraform apply` at the same time and the state got corrupted. How do you prevent this?
+Use a **remote backend with state locking**: S3 with native lockfile support (`use_lockfile = true`) or a DynamoDB table, the Azure Storage backend (blob lease) or GCS. Better still, run applies only through CI (Terraform Cloud, Atlantis, GitHub Actions) so humans don't apply from laptops. Turn on versioning on the state bucket for recovery.
+
+## Intermediate
+
+### Someone changed a security group manually in the console. What happens on the next `terraform plan`, and how do you handle drift?
+The plan shows the difference and offers to **revert** the change to match the code. Decide whether the manual change is wanted. If it is, add it to the code. If not, apply to revert it. Detect drift with scheduled `plan -detailed-exitcode` runs, and restrict console write access.
+
+### You need to rename a resource in code without destroying and recreating it.
+Use a **`moved` block** (Terraform 1.1+), or `terraform state mv`:
+```hcl
+moved {
+  from = aws_instance.web
+  to   = aws_instance.app
+}
+```
+To bring existing, unmanaged resources under Terraform, use `import` blocks (1.5+).
+
+## Advanced
+
+### How do you structure Terraform for 3 environments and 20 microservices across multiple teams?
+- Reusable, versioned **modules** (a registry, or git tags).
+- Separate **state per environment and component** to keep the blast radius small.
+- Environment configuration through tfvars or Terragrunt.
+- CI that plans on PRs and applies on merge, with policy checks (OPA/Sentinel, Checkov/tfsec).
+- Least-privilege, per-environment roles assumed via OIDC.
+- Outputs or remote state data sources only for clearly defined interfaces.
+
+# Tricky Questions
+
+## Beginner
+
+### What happens if you change the `name` of an S3 bucket in Terraform?
+The plan shows **destroy and recreate** (`-/+`), because the bucket name is a ForceNew attribute. The old bucket's data would be lost, or the destroy fails if the bucket isn't empty. Read the plan carefully, and use `lifecycle { prevent_destroy = true }` on critical resources.
+
+## Intermediate
+
+### `count` vs `for_each`: what goes wrong when you remove the middle item from a `count`-based list?
+`count` addresses resources by **index**, so removing item 1 of 3 shifts index 2 into slot 1, and Terraform destroys and recreates resources unnecessarily. `for_each` with a map or set keys resources by **stable string keys**, so only the removed one is destroyed.
+
+### Are secrets safe because you marked the variable `sensitive = true`?
+Only partly. `sensitive` hides the value in CLI output, but it's still stored **in plain text in the state file**. Protect state with encryption and access controls, or use ephemeral resources and write-only attributes (Terraform 1.10+/1.11+), or fetch secrets at runtime from a vault.
