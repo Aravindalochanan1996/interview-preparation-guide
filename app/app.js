@@ -5,6 +5,8 @@
   const TOPICS = DATA.topics;
   const byId = Object.fromEntries(TOPICS.map((t) => [t.id, t]));
   const LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+  const PATHS = DATA.paths || [];
+  const pathById = Object.fromEntries(PATHS.map((p) => [p.id, p]));
 
   const $ = (s, el = document) => el.querySelector(s);
   const main = $('#main');
@@ -56,7 +58,7 @@
   // ---------- views ----------
   function homeSidebar() {
     const cats = groupBy(TOPICS, (t) => t.category);
-    return `<div class="side-group"><a class="side-link special" href="#/">⌂ Home</a><a class="side-link special" href="#/practice">⚡ Flashcard practice</a></div>` +
+    return `<div class="side-group"><a class="side-link special" href="#/">⌂ Home</a><a class="side-link special" href="#/paths">🧭 Learning paths</a><a class="side-link special" href="#/practice">⚡ Flashcard practice</a></div>` +
       Object.entries(cats).map(([c, ts]) => `<div class="side-group"><h3>${esc(c)}</h3>${ts.map((t) => {
         const p = topicProgress(t);
         return `<a class="side-link" href="#/t/${t.id}"><span class="dot" style="background:${t.color}"></span>${esc(t.title)}<span class="count">${p.pct}%</span></a>`;
@@ -73,10 +75,13 @@
       <section class="hero">
         <div>
           <h1>Your interview preparation kit</h1>
-          <p>Learn every topic from the fundamentals up to the questions senior interviewers actually ask. Each track goes <strong>Beginner → Intermediate → Advanced</strong>, then finishes with a bank of interview questions and model answers.</p>
+          <p>Learn every topic from the fundamentals up to the questions senior interviewers actually ask. Each track goes <strong>Beginner → Intermediate → Advanced</strong>, then finishes with a bank of interview questions and model answers. Follow a <strong>learning path</strong> to go end to end — from zero to building and shipping real projects.</p>
           <div class="btn-row">
-            <a class="btn" href="${resumeLink()}">${doneCount ? 'Continue learning' : 'Start learning'} →</a>
-            <a class="btn ghost" href="#/practice">⚡ Flashcard practice</a>
+            ${activePath()
+              ? `<a class="btn" href="${pathResumeLink(activePath())}">Continue ${esc(activePath().title)} →</a>`
+              : `<a class="btn" href="#/paths">🧭 Choose a learning path</a>`}
+            <a class="btn ghost" href="${resumeLink()}">${doneCount ? 'Continue last track' : 'Browse tracks'}</a>
+            <a class="btn ghost" href="#/practice">⚡ Flashcards</a>
           </div>
         </div>
         <div class="hero-stats">
@@ -88,6 +93,9 @@
           <div class="stat"><b>${Math.round(((doneCount + masteredCount) / Math.max(1, L + Q)) * 100)}%</b><span>Overall</span></div>
         </div>
       </section>
+
+      <div class="section-title"><h2>Learning paths</h2><a href="#/paths">${PATHS.length} role-based roadmaps →</a></div>
+      <div class="grid">${PATHS.map(pathCard).join('')}</div>
 
       <div class="section-title"><h2>How to use this kit</h2><span>a study loop that works</span></div>
       <div class="roadmap">
@@ -111,6 +119,98 @@
       <div class="progress"><span style="width:${p.pct}%"></span></div>
       <div class="card-meta"><span>${p.lessons}/${t.lessons.length} lessons · ${p.questions}/${t.questions.length} mastered</span><span>${p.pct}%</span></div>
     </a>`;
+  }
+
+  // ---------- learning paths ----------
+  const stepKeys = (s) => s.slugs.map((slug) => `${s.topic}/${slug}`);
+  const stepProgress = (s) => {
+    const keys = stepKeys(s);
+    const d = keys.filter((k) => done.has(k)).length;
+    return { done: d, total: keys.length, pct: Math.round((d / keys.length) * 100) };
+  };
+  const pathProgress = (p) => {
+    const keys = [...new Set(p.steps.filter((s) => !s.optional).flatMap(stepKeys))];
+    const d = keys.filter((k) => done.has(k)).length;
+    return { done: d, total: keys.length, pct: keys.length ? Math.round((d / keys.length) * 100) : 0 };
+  };
+  const activePath = () => pathById[store.get('path', '')] || null;
+  const stepLink = (s) => {
+    const slug = s.slugs.find((x) => !done.has(`${s.topic}/${x}`)) || s.slugs[0];
+    return `#/t/${s.topic}/${slug}`;
+  };
+  function pathResumeLink(p) {
+    const step = p.steps.find((s) => !s.optional && stepProgress(s).pct < 100) || p.steps[0];
+    return stepLink(step);
+  }
+  function stepLabel(s) {
+    const t = byId[s.topic];
+    if (s.lessons) return s.slugs.map((slug) => t.lessons.find((l) => l.slug === slug).title).join(' + ');
+    return `${t.title}${s.levels ? ` — ${s.levels.join(', ')}` : ' — all levels'}`;
+  }
+
+  function pathCard(p) {
+    const pr = pathProgress(p);
+    return `<a class="card" href="#/paths/${p.id}">
+      <div class="card-head"><span class="t-icon" style="background:${p.color}">${p.icon}</span><div><h3>${esc(p.title)}</h3><small style="color:var(--muted)">${p.steps.length} steps · ${esc(p.duration)}</small></div></div>
+      <p>${esc(p.summary)}</p>
+      <div class="progress"><span style="width:${pr.pct}%"></span></div>
+      <div class="card-meta"><span>${pr.done}/${pr.total} lessons</span><span>${pr.pct}%</span></div>
+    </a>`;
+  }
+
+  function renderPaths() {
+    sidebar.innerHTML = homeSidebar();
+    main.innerHTML = `<div class="wide">
+      <div class="crumbs"><a href="#/">Home</a>›<span>Learning paths</span></div>
+      <header class="article-head"><h1>🧭 Learning paths</h1></header>
+      <div class="article-meta"><span>Pick the role you're preparing for. Each path orders the tracks and levels you need, from zero to job-ready, and ends with hands-on projects you build end to end.</span></div>
+      <div class="grid">${PATHS.map(pathCard).join('')}</div>
+    </div>`;
+  }
+
+  function renderPath(p) {
+    store.set('path', p.id);
+    const pr = pathProgress(p);
+    const next = p.steps.findIndex((s) => !s.optional && stepProgress(s).pct < 100);
+    sidebar.innerHTML = `<div class="side-topic"><span class="t-icon" style="background:${p.color}">${p.icon}</span><div><h2>${esc(p.title)}</h2><small>${esc(p.duration)}</small></div></div>
+      <div class="side-progress">${pr.done}/${pr.total} lessons · ${pr.pct}%<div class="progress"><span style="width:${pr.pct}%"></span></div></div>
+      <div class="side-group"><h3>Steps</h3>${p.steps.map((s, i) => {
+        const sp = stepProgress(s);
+        return `<a class="side-link ${sp.pct === 100 ? 'done' : ''}" href="${stepLink(s)}"><span class="tick">${sp.pct === 100 ? '✓' : i + 1}</span>${fmt(stepLabel(s))}</a>`;
+      }).join('')}</div>
+      <div class="side-group"><a class="side-link" href="#/paths">← All paths</a></div>`;
+    main.innerHTML = `<div class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<a href="#/paths">Learning paths</a>›<span>${esc(p.title)}</span></div>
+      <header class="article-head"><h1>${p.icon} ${esc(p.title)}</h1></header>
+      <div class="article-meta"><span>${p.steps.length} steps</span><span>~${esc(p.duration)} at 8–10 hrs/week</span><span>${pr.pct}% complete</span></div>
+      <p class="path-summary">${esc(p.summary)}</p>
+      <div class="btn-row" style="margin:16px 0 26px"><a class="btn" href="${pathResumeLink(p)}">${pr.done ? 'Continue path' : 'Start path'} →</a><a class="btn ghost" href="#/practice">⚡ Practise questions</a></div>
+      <ol class="path-steps">${p.steps.map((s, i) => {
+        const t = byId[s.topic];
+        const sp = stepProgress(s);
+        const state = sp.pct === 100 ? 'done' : i === next ? 'current' : '';
+        return `<li class="path-step ${state}">
+          <span class="step-num">${sp.pct === 100 ? '✓' : i + 1}</span>
+          <div class="step-body">
+            <div class="step-head">${icon(t, 'small')}<a href="${stepLink(s)}"><b>${fmt(stepLabel(s))}</b></a>${s.optional ? '<span class="tag">optional</span>' : ''}${t.id === 'projects' ? '<span class="tag">hands-on</span>' : ''}</div>
+            <p>${esc(s.why)}</p>
+            <div class="step-meta"><div class="progress"><span style="width:${sp.pct}%"></span></div><span>${sp.done}/${sp.total} lessons</span>${t.questions.length && t.id !== 'projects' ? `<a href="#/t/${t.id}/interview">🎯 ${t.questions.length} questions</a>` : ''}</div>
+          </div>
+        </li>`;
+      }).join('')}</ol>
+    </div>`;
+  }
+
+  // Where this lesson sits in the active path, for the "next in path" banner.
+  function pathContext(topicId, slug) {
+    const p = activePath();
+    if (!p) return null;
+    const i = p.steps.findIndex((s) => s.topic === topicId && s.slugs.includes(slug));
+    if (i < 0) return null;
+    const flat = p.steps.flatMap((s, si) => s.slugs.map((x) => ({ key: `${s.topic}/${x}`, href: `#/t/${s.topic}/${x}`, si })));
+    const pos = flat.findIndex((f) => f.key === `${topicId}/${slug}` && f.si === i);
+    const next = flat.slice(pos + 1).find((f) => !done.has(f.key) && !p.steps[f.si].optional);
+    return { p, i, next, nextStep: next && p.steps[next.si] };
   }
 
   function resumeLink() {
@@ -141,9 +241,13 @@
     if (!l) return renderInterview(t);
     const key = `${t.id}/${l.slug}`;
     const prev = t.lessons[idx - 1], next = t.lessons[idx + 1];
+    const ctx = pathContext(t.id, l.slug);
+    // inside a path, "complete" advances along the path rather than the track
+    const advanceTo = ctx ? ctx.next?.href : next && `#/t/${t.id}/${next.slug}`;
     store.set('last', key);
     sidebar.innerHTML = topicSidebar(t, l.slug);
     main.innerHTML = `<article class="content">
+      ${ctx ? `<a class="path-banner" href="#/paths/${ctx.p.id}">🧭 <b>${esc(ctx.p.title)}</b> · step ${ctx.i + 1} of ${ctx.p.steps.length}: ${fmt(stepLabel(ctx.p.steps[ctx.i]))}</a>` : ''}
       <div class="crumbs"><a href="#/">Home</a>›<a href="#/t/${t.id}">${esc(t.title)}</a>›<span>${l.level}</span></div>
       <header class="article-head"><h1>${fmt(l.title)}</h1></header>
       <div class="article-meta">${lvl(l.level)}<span>Lesson ${idx + 1} of ${t.lessons.length}</span><span>~${l.minutes} min read</span></div>
@@ -155,11 +259,14 @@
           ${next ? `<a class="next" href="#/t/${t.id}/${next.slug}"><small>Next →</small>${fmt(next.title)}</a>`
                  : `<a class="next" href="#/t/${t.id}/interview"><small>Next →</small>🎯 ${esc(t.title)} interview questions</a>`}
         </nav>
+        ${ctx ? `<a class="path-next" href="${ctx.next ? ctx.next.href : `#/paths/${ctx.p.id}`}"><small>Next in your path →</small>${ctx.next
+          ? (ctx.nextStep === ctx.p.steps[ctx.i] ? fmt(byId[ctx.nextStep.topic].lessons.find((x) => `${ctx.nextStep.topic}/${x.slug}` === ctx.next.key).title) : `Step ${ctx.p.steps.indexOf(ctx.nextStep) + 1}: ${fmt(stepLabel(ctx.nextStep))}`)
+          : '🎉 Path complete — review your progress'}</a>` : ''}
       </footer>
     </article>`;
     $('#doneBtn').addEventListener('click', () => {
       if (done.has(key)) done.delete(key);
-      else { done.add(key); if (next) { save(); location.hash = `#/t/${t.id}/${next.slug}`; return; } }
+      else { done.add(key); if (advanceTo) { save(); location.hash = advanceTo; return; } }
       save();
       renderLesson(t, l.slug);
     });
@@ -398,6 +505,8 @@
       if (parts[2] === 'interview') renderInterview(t);
       else renderLesson(t, parts[2] || firstUnread(t));
     } else if (parts[0] === 'practice') renderPractice();
+    else if (parts[0] === 'paths' && pathById[parts[1]]) renderPath(pathById[parts[1]]);
+    else if (parts[0] === 'paths') renderPaths();
     else renderHome();
 
     document.querySelectorAll('#topnav a').forEach((a) => a.classList.toggle('active', a.dataset.id === activeTopic));

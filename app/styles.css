@@ -355,3 +355,39 @@ code, pre, kbd { font-variant-ligatures: none; font-feature-settings: "liga" 0, 
   padding: 0 4px; border-radius: 4px; color: inherit;
 }
 .side-link.active code { background: transparent; border-color: currentColor; }
+
+/* ---------- learning paths ---------- */
+.section-title a { font-size: 14px; }
+.t-icon.small { width: 28px; height: 28px; font-size: 11px; border-radius: 7px; }
+.path-summary { font-size: 17px; color: var(--muted); margin: 0; }
+.path-steps { list-style: none; margin: 0; padding: 0; position: relative; }
+.path-steps::before { content: ""; position: absolute; left: 17px; top: 8px; bottom: 8px; width: 2px; background: var(--border); }
+.path-step { position: relative; display: flex; gap: 16px; padding: 0 0 18px; }
+.step-num {
+  position: relative; z-index: 1; flex-shrink: 0;
+  width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center; font-weight: 700; font-size: 14px;
+  background: var(--surface); border: 2px solid var(--border); color: var(--muted);
+}
+.path-step.done .step-num { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.path-step.current .step-num { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.step-body { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+.path-step.current .step-body { border-color: var(--accent); }
+.step-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.step-head a { color: var(--text); }
+.step-body p { margin: 6px 0 10px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.step-meta { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+.step-meta .progress { flex: 1; max-width: 220px; }
+.step-body code { font: .9em var(--mono); background: var(--surface-2); border: 1px solid var(--border); padding: 0 4px; border-radius: 4px; }
+.path-banner {
+  display: block; margin-bottom: 14px; padding: 8px 14px; border-radius: var(--radius);
+  background: var(--accent-soft); color: var(--text); font-size: 14px;
+}
+.path-banner:hover { text-decoration: none; filter: brightness(.98); }
+.path-banner code { font: .9em var(--mono); }
+.path-next {
+  display: block; margin-top: 12px; padding: 12px 16px; border-radius: var(--radius);
+  border: 1px solid var(--accent); background: var(--accent-soft); color: var(--text); text-align: right;
+}
+.path-next:hover { text-decoration: none; }
+.path-next small { display: block; color: var(--accent); font-size: 12px; font-weight: 600; }
