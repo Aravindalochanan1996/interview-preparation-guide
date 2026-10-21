@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrepStack — Interview Preparation Kit</title>
+  <meta name="description" content="Learn-only interview preparation kit: HTML, CSS, JavaScript, TypeScript, React, Angular, Vue, Node, Python, Django, FastAPI, SQL, Docker, Kubernetes, OpenShift, AI and System Design — beginner to advanced.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b7a55'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='Arial' font-weight='700'>PS</text></svg>">
+  <link rel="stylesheet" id="hljs-light" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <link rel="stylesheet" id="hljs-dark" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
+  <link rel="stylesheet" href="app/styles.css">
+  <script>
+    // Apply saved theme before paint to avoid a flash.
+    try { const t = localStorage.getItem('ipg.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn menu-btn" id="menuBtn" aria-label="Toggle navigation">☰</button>
+    <a class="brand" href="#/"><span class="logo">PS</span><span>PrepStack</span></a>
+    <nav class="topnav" id="topnav" aria-label="Topics"></nav>
+    <div class="top-actions">
+      <button class="search-trigger" id="searchBtn" aria-label="Search">
+        <span>⌕</span><span class="search-label">Search</span><kbd>/</kbd>
+      </button>
+      <a class="icon-btn" href="#/practice" title="Flashcard practice">⚡</a>
+      <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main" id="main" tabindex="-1"></main>
+  </div>
+
+  <div class="search-modal" id="searchModal" hidden>
+    <div class="search-box" role="dialog" aria-label="Search">
+      <input id="searchInput" type="search" placeholder="Search lessons and interview questions…" autocomplete="off">
+      <div class="search-results" id="searchResults"></div>
+      <div class="search-foot"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
+    </div>
+  </div>
+
+  <script src="app/data.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" defer></script>
+  <script src="app/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,429 @@
+(() => {
+  'use strict';
+
+  const DATA = window.IPG_DATA || { topics: [] };
+  const TOPICS = DATA.topics;
+  const byId = Object.fromEntries(TOPICS.map((t) => [t.id, t]));
+  const LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+
+  const $ = (s, el = document) => el.querySelector(s);
+  const main = $('#main');
+  const sidebar = $('#sidebar');
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // titles may contain `inline code` from the markdown source
+  const fmt = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // ---------- persistent state ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('ipg.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('ipg.' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
+  };
+  const done = new Set(store.get('done', []));
+  const mastered = new Set(store.get('mastered', []));
+  const save = () => { store.set('done', [...done]); store.set('mastered', [...mastered]); };
+
+  const topicProgress = (t) => {
+    const total = t.lessons.length + t.questions.length;
+    const d = t.lessons.filter((l) => done.has(`${t.id}/${l.slug}`)).length;
+    const m = t.questions.filter((q) => mastered.has(`${t.id}/${q.id}`)).length;
+    return { lessons: d, questions: m, pct: total ? Math.round(((d + m) / total) * 100) : 0 };
+  };
+
+  // ---------- theme ----------
+  const applyHljsTheme = () => {
+    const dark = document.documentElement.dataset.theme === 'dark' ||
+      (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+    if (dark && !document.documentElement.dataset.theme) document.documentElement.dataset.theme = 'dark';
+    $('#hljs-light').disabled = dark;
+    $('#hljs-dark').disabled = !dark;
+  };
+  applyHljsTheme();
+  $('#themeBtn').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    store.set('theme', next);
+    try { localStorage.setItem('ipg.theme', next); } catch (e) { /* ignore */ }
+    applyHljsTheme();
+  });
+
+  // ---------- top nav ----------
+  $('#topnav').innerHTML = TOPICS.map((t) => `<a href="#/t/${t.id}" data-id="${t.id}">${esc(t.short)}</a>`).join('');
+  $('#menuBtn').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+
+  const icon = (t, cls = '') => `<span class="t-icon ${cls}" style="background:${t.color}">${esc(t.icon)}</span>`;
+  const lvl = (l) => `<span class="lvl ${l}"><span class="dot ${l}"></span>${l}</span>`;
+
+  // ---------- views ----------
+  function homeSidebar() {
+    const cats = groupBy(TOPICS, (t) => t.category);
+    return `<div class="side-group"><a class="side-link special" href="#/">⌂ Home</a><a class="side-link special" href="#/practice">⚡ Flashcard practice</a></div>` +
+      Object.entries(cats).map(([c, ts]) => `<div class="side-group"><h3>${esc(c)}</h3>${ts.map((t) => {
+        const p = topicProgress(t);
+        return `<a class="side-link" href="#/t/${t.id}"><span class="dot" style="background:${t.color}"></span>${esc(t.title)}<span class="count">${p.pct}%</span></a>`;
+      }).join('')}</div>`).join('');
+  }
+
+  function renderHome() {
+    const L = TOPICS.reduce((a, t) => a + t.lessons.length, 0);
+    const Q = TOPICS.reduce((a, t) => a + t.questions.length, 0);
+    const doneCount = done.size, masteredCount = mastered.size;
+    const cats = groupBy(TOPICS, (t) => t.category);
+    sidebar.innerHTML = homeSidebar();
+    main.innerHTML = `<div class="wide">
+      <section class="hero">
+        <div>
+          <h1>Your interview preparation kit</h1>
+          <p>Learn every topic from the fundamentals up to the questions senior interviewers actually ask. Each track goes <strong>Beginner → Intermediate → Advanced</strong>, then finishes with a bank of interview questions and model answers.</p>
+          <div class="btn-row">
+            <a class="btn" href="${resumeLink()}">${doneCount ? 'Continue learning' : 'Start learning'} →</a>
+            <a class="btn ghost" href="#/practice">⚡ Flashcard practice</a>
+          </div>
+        </div>
+        <div class="hero-stats">
+          <div class="stat"><b>${TOPICS.length}</b><span>Tracks</span></div>
+          <div class="stat"><b>${L}</b><span>Lessons</span></div>
+          <div class="stat"><b>${Q}</b><span>Interview Q&amp;A</span></div>
+          <div class="stat"><b>${doneCount}</b><span>Lessons done</span></div>
+          <div class="stat"><b>${masteredCount}</b><span>Q mastered</span></div>
+          <div class="stat"><b>${Math.round(((doneCount + masteredCount) / Math.max(1, L + Q)) * 100)}%</b><span>Overall</span></div>
+        </div>
+      </section>
+
+      <div class="section-title"><h2>How to use this kit</h2><span>a study loop that works</span></div>
+      <div class="roadmap">
+        <div class="road-step"><h4>Read the lesson</h4><p>Go level by level. Beginner lessons fix the vocabulary interviewers expect you to use precisely.</p></div>
+        <div class="road-step"><h4>Say it out loud</h4><p>After each lesson, explain the "Interview angle" box in your own words in under 60 seconds.</p></div>
+        <div class="road-step"><h4>Drill the Q&amp;A</h4><p>Open the topic's interview questions. Answer before revealing; mark the ones you nail as mastered.</p></div>
+        <div class="road-step"><h4>Flashcards daily</h4><p>Use ⚡ Practice to mix questions across topics — it surfaces what you have not mastered yet.</p></div>
+      </div>
+
+      ${Object.entries(cats).map(([c, ts]) => `
+        <div class="section-title"><h2>${esc(c)}</h2><span>${ts.length} track${ts.length > 1 ? 's' : ''}</span></div>
+        <div class="grid">${ts.map(card).join('')}</div>`).join('')}
+    </div>`;
+  }
+
+  function card(t) {
+    const p = topicProgress(t);
+    return `<a class="card" href="#/t/${t.id}">
+      <div class="card-head">${icon(t)}<div><h3>${esc(t.title)}</h3><small style="color:var(--muted)">${t.lessons.length} lessons · ${t.questions.length} questions</small></div></div>
+      <p>${esc(t.summary)}</p>
+      <div class="progress"><span style="width:${p.pct}%"></span></div>
+      <div class="card-meta"><span>${p.lessons}/${t.lessons.length} lessons · ${p.questions}/${t.questions.length} mastered</span><span>${p.pct}%</span></div>
+    </a>`;
+  }
+
+  function resumeLink() {
+    for (const t of TOPICS) for (const l of t.lessons) if (!done.has(`${t.id}/${l.slug}`) && t.lessons.some((x) => done.has(`${t.id}/${x.slug}`))) return `#/t/${t.id}/${l.slug}`;
+    return TOPICS[0] ? `#/t/${TOPICS[0].id}` : '#/';
+  }
+
+  function topicSidebar(t, active) {
+    const p = topicProgress(t);
+    const groups = LEVELS.map((L) => {
+      const ls = t.lessons.filter((l) => l.level === L);
+      if (!ls.length) return '';
+      return `<div class="side-group"><h3><span class="dot ${L}"></span>${L}</h3>${ls.map((l) => {
+        const isDone = done.has(`${t.id}/${l.slug}`);
+        return `<a class="side-link ${isDone ? 'done' : ''} ${active === l.slug ? 'active' : ''}" href="#/t/${t.id}/${l.slug}"><span class="tick">${isDone ? '✓' : ''}</span>${fmt(l.title)}</a>`;
+      }).join('')}</div>`;
+    }).join('');
+    return `<div class="side-topic">${icon(t)}<div><h2>${esc(t.title)}</h2><small>${esc(t.category)}</small></div></div>
+      <div class="side-progress">${p.lessons}/${t.lessons.length} lessons · ${p.questions}/${t.questions.length} Q mastered<div class="progress"><span style="width:${p.pct}%"></span></div></div>
+      <div class="side-group"><a class="side-link special ${active === 'interview' ? 'active' : ''}" href="#/t/${t.id}/interview">🎯 Interview Questions<span class="count">${t.questions.length}</span></a></div>
+      ${groups}
+      <div class="side-group"><a class="side-link" href="#/">← All tracks</a></div>`;
+  }
+
+  function renderLesson(t, slug) {
+    const idx = Math.max(0, t.lessons.findIndex((l) => l.slug === slug));
+    const l = t.lessons[idx];
+    if (!l) return renderInterview(t);
+    const key = `${t.id}/${l.slug}`;
+    const prev = t.lessons[idx - 1], next = t.lessons[idx + 1];
+    store.set('last', key);
+    sidebar.innerHTML = topicSidebar(t, l.slug);
+    main.innerHTML = `<article class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<a href="#/t/${t.id}">${esc(t.title)}</a>›<span>${l.level}</span></div>
+      <header class="article-head"><h1>${fmt(l.title)}</h1></header>
+      <div class="article-meta">${lvl(l.level)}<span>Lesson ${idx + 1} of ${t.lessons.length}</span><span>~${l.minutes} min read</span></div>
+      <div class="prose">${l.html}</div>
+      <footer class="article-foot">
+        <div class="complete-row"><button class="btn ${done.has(key) ? 'ghost' : ''}" id="doneBtn">${done.has(key) ? '✓ Completed — mark as not done' : 'Mark lesson as complete'}</button></div>
+        <nav class="pager">
+          ${prev ? `<a href="#/t/${t.id}/${prev.slug}"><small>← Previous</small>${fmt(prev.title)}</a>` : ''}
+          ${next ? `<a class="next" href="#/t/${t.id}/${next.slug}"><small>Next →</small>${fmt(next.title)}</a>`
+                 : `<a class="next" href="#/t/${t.id}/interview"><small>Next →</small>🎯 ${esc(t.title)} interview questions</a>`}
+        </nav>
+      </footer>
+    </article>`;
+    $('#doneBtn').addEventListener('click', () => {
+      if (done.has(key)) done.delete(key);
+      else { done.add(key); if (next) { save(); location.hash = `#/t/${t.id}/${next.slug}`; return; } }
+      save();
+      renderLesson(t, l.slug);
+    });
+    enhance();
+  }
+
+  function renderInterview(t) {
+    const state = store.get('qaFilter', { level: 'All', q: '' });
+    sidebar.innerHTML = topicSidebar(t, 'interview');
+    main.innerHTML = `<div class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<a href="#/t/${t.id}">${esc(t.title)}</a>›<span>Interview questions</span></div>
+      <header class="article-head"><h1>${esc(t.title)} interview questions</h1></header>
+      <div class="article-meta"><span>${t.questions.length} questions with model answers</span><span>Answer out loud first, then reveal.</span></div>
+      <div class="toolbar" id="qaBar">
+        ${['All', ...LEVELS].map((L) => `<button class="chip ${state.level === L ? 'on' : ''}" data-level="${L}">${L} <span style="opacity:.7">${L === 'All' ? t.questions.length : t.questions.filter((q) => q.level === L).length}</span></button>`).join('')}
+        <input class="filter-input" id="qaFilter" placeholder="Filter questions…" value="${esc(state.q)}">
+        <button class="chip" id="expandAll">Expand all</button>
+      </div>
+      <div id="qaList"></div>
+    </div>`;
+
+    const draw = () => {
+      const q = state.q.trim().toLowerCase();
+      const list = t.questions.filter((x) => (state.level === 'All' || x.level === state.level) && (!q || (x.q + ' ' + x.text).toLowerCase().includes(q)));
+      $('#qaList').innerHTML = list.length ? list.map((x, i) => {
+        const key = `${t.id}/${x.id}`;
+        return `<details class="qa ${mastered.has(key) ? 'mastered' : ''}" data-key="${key}">
+          <summary><span class="num">${i + 1}.</span><span class="qtext">${fmt(x.q)}</span>${lvl(x.level)}<span class="chev">›</span></summary>
+          <div class="answer prose">${x.html}
+            <div class="answer-foot"><button class="btn small ${mastered.has(key) ? 'ghost' : ''}" data-master="${key}">${mastered.has(key) ? '✓ Mastered' : 'Mark as mastered'}</button></div>
+          </div></details>`;
+      }).join('') : '<div class="empty">No questions match.</div>';
+      enhance();
+    };
+    draw();
+
+    $('#qaBar').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-level]');
+      if (b) {
+        state.level = b.dataset.level; store.set('qaFilter', state);
+        [...document.querySelectorAll('[data-level]')].forEach((c) => c.classList.toggle('on', c === b));
+        draw();
+      }
+    });
+    $('#qaFilter').addEventListener('input', (e) => { state.q = e.target.value; store.set('qaFilter', state); draw(); });
+    $('#expandAll').addEventListener('click', (e) => {
+      const all = [...document.querySelectorAll('.qa')];
+      const open = !all.every((d) => d.open);
+      all.forEach((d) => (d.open = open));
+      e.target.textContent = open ? 'Collapse all' : 'Expand all';
+    });
+    $('#qaList').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-master]');
+      if (!b) return;
+      const key = b.dataset.master;
+      mastered.has(key) ? mastered.delete(key) : mastered.add(key);
+      save();
+      const d = b.closest('.qa');
+      d.classList.toggle('mastered', mastered.has(key));
+      b.classList.toggle('ghost', mastered.has(key));
+      b.textContent = mastered.has(key) ? '✓ Mastered' : 'Mark as mastered';
+      sidebar.innerHTML = topicSidebar(t, 'interview');
+    });
+  }
+
+  // ---------- flashcard practice ----------
+  function renderPractice() {
+    const cfg = store.get('practice', { topics: [], level: 'All', unmasteredOnly: true });
+    let session = { seen: 0, known: 0 };
+    sidebar.innerHTML = homeSidebar();
+
+    const pool = () => {
+      const ts = cfg.topics.length ? TOPICS.filter((t) => cfg.topics.includes(t.id)) : TOPICS;
+      const out = [];
+      ts.forEach((t) => t.questions.forEach((q) => {
+        if (cfg.level !== 'All' && q.level !== cfg.level) return;
+        if (cfg.unmasteredOnly && mastered.has(`${t.id}/${q.id}`)) return;
+        out.push({ t, q });
+      }));
+      return out;
+    };
+
+    main.innerHTML = `<div class="content">
+      <div class="crumbs"><a href="#/">Home</a>›<span>Practice</span></div>
+      <header class="article-head"><h1>⚡ Flashcard practice</h1></header>
+      <div class="article-meta"><span>Random questions across your chosen tracks. Answer aloud, reveal, then grade yourself honestly.</span></div>
+      <div class="toolbar" id="pTopics">
+        <button class="chip ${cfg.topics.length ? '' : 'on'}" data-t="">All tracks</button>
+        ${TOPICS.map((t) => `<button class="chip ${cfg.topics.includes(t.id) ? 'on' : ''}" data-t="${t.id}">${esc(t.short)}</button>`).join('')}
+      </div>
+      <div class="toolbar" id="pLevels">
+        ${['All', ...LEVELS].map((L) => `<button class="chip ${cfg.level === L ? 'on' : ''}" data-l="${L}">${L}</button>`).join('')}
+        <label style="font-size:14px;display:flex;gap:6px;align-items:center;margin-left:auto"><input type="checkbox" id="pUnm" ${cfg.unmasteredOnly ? 'checked' : ''}> Only questions I haven't mastered</label>
+      </div>
+      <div id="flash"></div>
+    </div>`;
+
+    const next = () => {
+      const p = pool();
+      const box = $('#flash');
+      if (!p.length) {
+        box.innerHTML = `<div class="flash"><div class="empty">🎉 Nothing left in this selection. Pick more tracks or include mastered questions.</div></div>`;
+        return;
+      }
+      const { t, q } = p[Math.floor(Math.random() * p.length)];
+      const key = `${t.id}/${q.id}`;
+      box.innerHTML = `<div class="flash">
+        <div class="flash-meta">${icon(t, '')}<span>${esc(t.title)}</span>${lvl(q.level)}<span style="margin-left:auto">${p.length} in pool</span></div>
+        <div class="q">${fmt(q.q)}</div>
+        <div class="flash-actions" id="revealRow"><button class="btn" id="reveal">Reveal answer <kbd>Space</kbd></button><button class="btn ghost" id="skip">Skip</button></div>
+        <div class="answer prose" id="ans" hidden>${q.html}
+          <div class="flash-actions"><button class="btn" id="knew">✓ I knew it (mark mastered)</button><button class="btn ghost" id="again">↻ Review again later</button></div>
+        </div>
+      </div>
+      <div class="score"><span>This session: ${session.seen} seen</span><span>${session.known} known</span><span>${session.seen ? Math.round((session.known / session.seen) * 100) : 0}% recall</span></div>`;
+      box.querySelector('.t-icon').style.cssText += ';width:28px;height:28px;font-size:11px;border-radius:7px';
+      const reveal = () => { $('#ans').hidden = false; $('#revealRow').hidden = true; enhance(); };
+      $('#reveal').onclick = reveal;
+      $('#skip').onclick = next;
+      $('#knew').onclick = () => { mastered.add(key); save(); session.seen++; session.known++; next(); };
+      $('#again').onclick = () => { session.seen++; next(); };
+      box.reveal = reveal;
+    };
+
+    $('#pTopics').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-t]'); if (!b) return;
+      const id = b.dataset.t;
+      if (!id) cfg.topics = [];
+      else cfg.topics = cfg.topics.includes(id) ? cfg.topics.filter((x) => x !== id) : [...cfg.topics, id];
+      document.querySelectorAll('#pTopics .chip').forEach((c) => c.classList.toggle('on', c.dataset.t ? cfg.topics.includes(c.dataset.t) : !cfg.topics.length));
+      store.set('practice', cfg); next();
+    });
+    $('#pLevels').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-l]'); if (!b) return;
+      cfg.level = b.dataset.l;
+      document.querySelectorAll('#pLevels .chip').forEach((c) => c.classList.toggle('on', c === b));
+      store.set('practice', cfg); next();
+    });
+    $('#pUnm').addEventListener('change', (e) => { cfg.unmasteredOnly = e.target.checked; store.set('practice', cfg); next(); });
+    next();
+  }
+
+  // ---------- search ----------
+  const index = [];
+  TOPICS.forEach((t) => {
+    t.lessons.forEach((l) => index.push({ kind: 'Lesson', t, title: l.title.replace(/`/g, ''), level: l.level, href: `#/t/${t.id}/${l.slug}`, hay: (l.title + ' ' + t.title).toLowerCase().replace(/`/g, ''), body: l.text.toLowerCase(), raw: l.text }));
+    t.questions.forEach((q) => index.push({ kind: 'Question', t, title: q.q.replace(/`/g, ''), level: q.level, href: `#/t/${t.id}/interview`, qid: q.id, hay: (q.q + ' ' + t.title).toLowerCase().replace(/`/g, ''), body: q.text.toLowerCase(), raw: q.text }));
+  });
+  const modal = $('#searchModal'), input = $('#searchInput'), results = $('#searchResults');
+  let sel = 0, hits = [];
+  const openSearch = () => { modal.hidden = false; input.value = ''; drawResults(); input.focus(); };
+  const closeSearch = () => { modal.hidden = true; };
+  const hl = (s, terms) => terms.reduce((acc, w) => acc.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig'), '<mark>$1</mark>'), esc(s));
+
+  function drawResults() {
+    const terms = input.value.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) {
+      results.innerHTML = `<div class="empty">Type to search ${index.length} lessons and questions. Try “closure”, “useEffect”, “ORM”, “pod”.</div>`;
+      hits = []; return;
+    }
+    hits = index.map((r) => {
+      let score = 0;
+      for (const w of terms) {
+        if (r.hay.includes(w)) score += 10;
+        else if (r.body.includes(w)) score += 2;
+        else return null;
+      }
+      if (r.title.toLowerCase().includes(terms.join(' '))) score += 15;
+      if (r.kind === 'Lesson') score += 1;
+      return { r, score };
+    }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 40).map((x) => x.r);
+    sel = 0;
+    results.innerHTML = hits.length ? hits.map((r, i) => {
+      const pos = r.body.indexOf(terms[0]);
+      const snip = pos >= 0 ? (pos > 50 ? '…' : '') + r.raw.slice(Math.max(0, pos - 50), pos + 130) + '…' : '';
+      return `<a href="${r.href}" data-i="${i}" ${r.qid ? `data-q="${r.qid}"` : ''} class="${i === 0 ? 'sel' : ''}">
+        <div class="r-title">${hl(r.title, terms)}</div>
+        <div class="r-sub"><span class="tag">${r.kind}</span> ${esc(r.t.title)} · ${r.level}</div>
+        ${snip ? `<div class="r-snip">${hl(snip, terms)}</div>` : ''}</a>`;
+    }).join('') : '<div class="empty">No results.</div>';
+  }
+  input.addEventListener('input', drawResults);
+  input.addEventListener('keydown', (e) => {
+    const links = [...results.querySelectorAll('a')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!links.length) return;
+      sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length;
+      links.forEach((a, i) => a.classList.toggle('sel', i === sel));
+      links[sel].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && links[sel]) {
+      e.preventDefault(); links[sel].click();
+    }
+  });
+  results.addEventListener('click', (e) => {
+    const a = e.target.closest('a'); if (!a) return;
+    if (a.dataset.q) pendingQuestion = a.dataset.q;
+    closeSearch();
+    // same-hash links don't fire hashchange, so route manually
+    if (a.getAttribute('href') === location.hash) { e.preventDefault(); route(); }
+  });
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeSearch(); });
+  $('#searchBtn').addEventListener('click', openSearch);
+  document.addEventListener('keydown', (e) => {
+    const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+    if (e.key === 'Escape') { closeSearch(); document.body.classList.remove('nav-open'); }
+    else if ((e.key === '/' && !typing) || (e.key.toLowerCase() === 'k' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); openSearch(); }
+    else if (e.key === ' ' && !typing && $('#flash') && $('#flash').reveal && $('#reveal')) { e.preventDefault(); $('#flash').reveal(); }
+  });
+
+  // ---------- helpers ----------
+  function groupBy(arr, fn) { return arr.reduce((acc, x) => ((acc[fn(x)] = acc[fn(x)] || []).push(x), acc), {}); }
+
+  function enhance() {
+    if (window.hljs) main.querySelectorAll('pre code:not(.hljs)').forEach((el) => {
+      if (el.closest('details:not([open])') || el.closest('[hidden]')) return;
+      try { window.hljs.highlightElement(el); } catch (e) { /* unknown language */ }
+    });
+  }
+  main.addEventListener('toggle', (e) => { if (e.target.open) enhance(); }, true);
+  main.addEventListener('click', (e) => {
+    const b = e.target.closest('.copy'); if (!b) return;
+    const code = b.closest('.code').querySelector('code').innerText;
+    navigator.clipboard?.writeText(code).then(() => { b.textContent = 'Copied'; setTimeout(() => (b.textContent = 'Copy'), 1200); });
+  });
+
+  // ---------- router ----------
+  let pendingQuestion = null;
+  function route() {
+    document.body.classList.remove('nav-open');
+    const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+    let activeTopic = null;
+    if (parts[0] === 't' && byId[parts[1]]) {
+      const t = byId[parts[1]];
+      activeTopic = t.id;
+      if (parts[2] === 'interview') renderInterview(t);
+      else renderLesson(t, parts[2] || firstUnread(t));
+    } else if (parts[0] === 'practice') renderPractice();
+    else renderHome();
+
+    document.querySelectorAll('#topnav a').forEach((a) => a.classList.toggle('active', a.dataset.id === activeTopic));
+    const act = $(`#topnav a[data-id="${activeTopic}"]`); act && act.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const sideAct = $('.side-link.active', sidebar); sideAct && sideAct.scrollIntoView({ block: 'nearest' });
+
+    if (pendingQuestion) {
+      const d = main.querySelector(`.qa[data-key$="/${CSS.escape(pendingQuestion)}"]`);
+      if (!d) {
+        // question may be hidden by a level filter — reset filter and retry
+        store.set('qaFilter', { level: 'All', q: '' });
+        if (parts[2] === 'interview') { renderInterview(byId[parts[1]]); }
+      }
+      const d2 = main.querySelector(`.qa[data-key$="/${CSS.escape(pendingQuestion)}"]`);
+      if (d2) { d2.open = true; enhance(); setTimeout(() => d2.scrollIntoView({ block: 'start' }), 30); }
+      pendingQuestion = null;
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+  function firstUnread(t) {
+    const l = t.lessons.find((x) => !done.has(`${t.id}/${x.slug}`)) || t.lessons[0];
+    return l && l.slug;
+  }
+
+  window.addEventListener('hashchange', route);
+  window.addEventListener('load', enhance);
+  route();
+})();
