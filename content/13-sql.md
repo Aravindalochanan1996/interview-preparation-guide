@@ -444,3 +444,61 @@ Use cache-aside with delete-on-write (invalidate after the DB commit), short TTL
 
 ### What is the difference between clustered and non-clustered indexes?
 A clustered index determines the physical order of rows in the table, so there's only one (InnoDB's primary key). A non-clustered (secondary) index is a separate structure storing key values and a pointer (row id or primary key) to the row, requiring an extra lookup unless it's covering.
+
+# Scenario Questions
+
+## Beginner
+
+### A query that ran in 50 ms now takes 30 s since the table grew to 20 million rows. What do you do first?
+Run **`EXPLAIN ANALYZE`** and look for sequential scans on big tables, bad row estimates, and sorts or hash joins spilling to disk. Then:
+- Add an index that matches the `WHERE`/`JOIN`/`ORDER BY` columns (a composite index in the right column order).
+- Rewrite non-sargable predicates (`WHERE DATE(created_at) = …` becomes a range).
+- Update statistics (`ANALYZE`).
+- Paginate with keyset pagination instead of a big `OFFSET`.
+
+## Intermediate
+
+### A report double-counts revenue after you join orders with order_items and payments. Why?
+Joining two **one-to-many** relations from the same parent multiplies rows: 3 items × 2 payments = 6 rows per order, so `SUM` inflates. Aggregate each child table in its own subquery or CTE first, then join the aggregates.
+```sql
+WITH i AS (SELECT order_id, SUM(qty * price) AS items_total FROM order_items GROUP BY order_id),
+     p AS (SELECT order_id, SUM(amount) AS paid FROM payments GROUP BY order_id)
+SELECT o.id, i.items_total, p.paid FROM orders o
+LEFT JOIN i ON i.order_id = o.id LEFT JOIN p ON p.order_id = o.id;
+```
+
+### Users sometimes see deadlock errors when two transfers run at the same time. How do you fix it?
+Two transactions lock the same rows in **opposite order** (A→B and B→A). Always lock in a consistent order (for example by ascending account id with `SELECT … FOR UPDATE`), keep transactions short, add the right indexes so updates don't lock extra rows, and retry on deadlock errors with backoff.
+
+## Advanced
+
+### Your primary database is at 90% CPU, mostly from read traffic. What options do you have?
+- Fix the top queries first (`pg_stat_statements`).
+- Add **read replicas** and route reads there, accepting replication lag; read your own writes from the primary.
+- Cache hot data (Redis) with a clear invalidation plan.
+- Use materialised views for heavy reports.
+- Add connection pooling.
+- Only then consider vertical scaling, partitioning, or sharding by tenant.
+
+# Tricky Questions
+
+## Beginner
+
+### What does `SELECT * FROM users WHERE manager_id = NULL` return?
+**No rows, ever.** Comparing with NULL yields UNKNOWN, not TRUE. Use `IS NULL`. Likewise, `WHERE status <> 'active'` silently excludes rows where `status` is NULL.
+
+### `SELECT COUNT(*), COUNT(email), COUNT(DISTINCT email) FROM users` returns 100, 80, 75. Why are they different?
+`COUNT(*)` counts rows. `COUNT(col)` skips NULLs, so 20 users have no email. `COUNT(DISTINCT col)` also removes duplicates, so 5 addresses appear more than once.
+
+## Intermediate
+
+### Why does this return no rows when `blocked` has a NULL in it? `SELECT * FROM users WHERE id NOT IN (SELECT user_id FROM blocked)`
+`x NOT IN (1, 2, NULL)` means `x <> 1 AND x <> 2 AND x <> NULL`, and the last part is UNKNOWN, so the whole condition is never TRUE. Use `NOT EXISTS` (NULL-safe) or filter the NULLs out of the subquery.
+
+### A LEFT JOIN acts like an INNER JOIN. What's wrong? `SELECT … FROM customers c LEFT JOIN orders o ON o.customer_id = c.id WHERE o.status = 'paid'`
+The `WHERE` filter on the right table discards the NULL-extended rows. Move the condition into the join: `LEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'`.
+
+## Advanced
+
+### Your index on `(last_name, first_name)` isn't used by `WHERE first_name = 'Ana'`. Why?
+B-tree composite indexes follow the **leftmost prefix** rule. They help with `last_name`, or `last_name + first_name`, but not with `first_name` alone (except via a skip scan in some engines). Add an index on `first_name`, or reorder the columns based on your query patterns.

@@ -298,6 +298,12 @@ kbd {
 .qa .answer { padding: 0 18px 14px 56px; }
 .qa .answer-foot { display: flex; justify-content: flex-end; padding-top: 6px; }
 .empty { text-align: center; padding: 40px; color: var(--muted); }
+.qa summary .tag { margin-top: 2px; white-space: nowrap; }
+.qa-group { margin-bottom: 26px; }
+.qa-group h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; margin: 0 0 12px; }
+.qa-group h2 a { color: inherit; text-decoration: none; }
+.qa-group h2 a:hover { text-decoration: underline; }
+.qa-group h2 > span:last-child { color: var(--muted); font-size: 13px; font-weight: 500; }
 
 /* ---------- practice ---------- */
 .flash {
@@ -344,6 +350,12 @@ kbd {
   .qa .answer { padding: 0 14px 14px; }
   .pager { grid-template-columns: 1fr; }
   .pager .next { grid-column: 1; }
+  .qa summary { flex-wrap: wrap; }
+  .qa summary .qtext { flex: 1 1 calc(100% - 70px); min-width: 0; overflow-wrap: anywhere; }
+}
+@media (max-width: 480px) {
+  .brand > span:not(.logo) { display: none; }
+  .top-actions { gap: 4px; }
 }
 
 /* code fonts: keep operators literal (=> not ⇒) */

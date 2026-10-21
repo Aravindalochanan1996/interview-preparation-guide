@@ -366,3 +366,42 @@ Clean or vertical-slice architecture with clear boundaries, DI with appropriate 
 
 ### How do you secure an ASP.NET Core API?
 Use HTTPS and HSTS, JWT bearer authentication against a trusted identity provider, policy-based authorization including resource checks, input validation, parameterised queries, rate limiting, CORS restrictions, secrets in Key Vault with managed identities, and security headers; log and monitor without exposing sensitive data.
+
+# Scenario Questions
+
+## Beginner
+
+### Your ASP.NET Core API returns 500 errors, but you can't see why in production. How do you get useful diagnostics?
+- Add structured logging (`ILogger` with Serilog or OpenTelemetry) shipped to a central store such as Application Insights.
+- Use the exception handler middleware with **ProblemDetails** responses (no stack traces sent to clients).
+- Add correlation IDs, and health checks.
+- Make sure the `ASPNETCORE_ENVIRONMENT` and log levels are right.
+
+## Intermediate
+
+### Under load the API stops responding, and the thread pool shows hundreds of blocked threads. What's the cause?
+That's **sync-over-async**: calling `.Result`, `.Wait()` or `GetAwaiter().GetResult()` on tasks blocks thread-pool threads while they wait for other thread-pool work, so the pool starves. Go **async all the way** (`await`), use async EF Core and HttpClient methods, and never block on async code in request paths.
+
+### You create `new HttpClient()` per request, and the server runs out of sockets. How do you fix it?
+Each instance holds a connection that lingers in TIME_WAIT after disposal, which causes **socket exhaustion**. Use **`IHttpClientFactory`** (named or typed clients) or one long-lived static client with `SocketsHttpHandler.PooledConnectionLifetime`, so connections are pooled and DNS changes are still respected.
+
+## Advanced
+
+### EF Core queries are slow on a large reporting page. What do you look at?
+- Log the generated SQL (`LogTo`, or `ToQueryString()`).
+- Make sure filters run in the database, not in memory: avoid calling `.ToList()` too early, and avoid client evaluation.
+- Use `AsNoTracking()` for read-only queries, project to DTOs with `Select`, use `AsSplitQuery()` to avoid cartesian explosions, add indexes, and use compiled queries for hot paths.
+- Use raw SQL or Dapper for complex reports.
+
+# Tricky Questions
+
+## Intermediate
+
+### What's the difference between `IEnumerable<T>` and `IQueryable<T>` for this query? `db.Users.AsEnumerable().Where(u => u.Age > 30)`
+`AsEnumerable()` switches to LINQ-to-Objects, so **the whole Users table is loaded** and filtered in memory. With `IQueryable`, `Where` is translated to SQL and runs in the database. Keep queries `IQueryable` until the final materialisation.
+
+### What does `async void` do that `async Task` doesn't?
+An exception thrown in `async void` can't be awaited or caught by the caller. It goes to the synchronisation context and can **crash the process**, and callers can't tell when the method finishes. Use `async void` only for event handlers; everything else should return `Task`.
+
+### A singleton service injects a scoped `DbContext`. What's wrong?
+That's a **captive dependency**: the scoped DbContext lives as long as the singleton, is shared across requests and threads (DbContext isn't thread-safe), and holds stale tracked entities. ASP.NET Core's scope validation throws in development. Inject `IServiceScopeFactory` (or `IDbContextFactory`) and create a scope per operation.

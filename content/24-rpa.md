@@ -322,3 +322,43 @@ AI extends RPA to unstructured data (documents, emails, conversations) and judge
 
 ### UiPath vs Power Automate vs Automation Anywhere?
 UiPath is the most comprehensive enterprise RPA platform with strong UI automation, Orchestrator, REFramework and AI capabilities. Power Automate excels in Microsoft ecosystems with low-cost cloud connectors and citizen development. Automation Anywhere offers a cloud-native, web-based platform with strong document automation. Choice depends on ecosystem, process complexity, scale, governance and licensing.
+
+# Scenario Questions
+
+## Beginner
+
+### Your bot breaks every time the target web app changes slightly. How do you make it more resilient?
+- Use **stable selectors**: anchor-based, attribute-based (id, name, aaname) rather than index or position, with wildcards for dynamic parts.
+- Prefer APIs or database access over UI automation when they're available.
+- Add retry scopes and checks that the element exists.
+- Centralise selectors in an object repository so one fix updates every workflow.
+
+## Intermediate
+
+### An invoice bot processes 2,000 items a day but crashes midway, and restarting duplicates work. How do you redesign it?
+Use the **REFramework / dispatcher–performer** pattern:
+- A dispatcher adds each invoice to an **Orchestrator queue**, with a unique reference so duplicates are rejected.
+- Performers process one transaction at a time, with status, retries and exception handling (business versus system exceptions).
+- Robots can scale horizontally.
+- Failed items are retried or routed to a human, and restarts pick up where they left off.
+
+### How do you handle credentials securely in an attended or unattended bot?
+Store them in **Orchestrator Assets / Credential Manager**, or an external vault (CyberArk, Azure Key Vault). Never put them in workflows or config files. Use least-privilege service accounts, rotate passwords, mask them in logs, and use `SecureString` in variables.
+
+## Advanced
+
+### The business wants to automate a process with scanned invoices in 50 different layouts. What's your approach?
+- Use **Intelligent Document Processing** (UiPath Document Understanding or AI Center, Azure AI Document Intelligence): OCR, classification, and ML extractors trained per document type.
+- Route low-confidence fields to a **human-in-the-loop** validation station.
+- Feed corrections back for retraining.
+- Measure straight-through processing rate and accuracy per vendor.
+
+# Tricky Questions
+
+## Intermediate
+
+### Business exception vs system exception: which one should be retried?
+**System exceptions** (an app timeout, a selector not found, a network failure) are worth retrying, often after restarting the application. **Business exceptions** (invalid invoice data, a missing PO number) won't succeed on retry, so flag them and send them to a human or the business.
+
+### Is every repetitive process a good RPA candidate?
+No. Good candidates are **rule-based**, stable, high-volume, use digital and structured inputs, and have few exceptions. A process that changes often or relies heavily on judgement makes a fragile bot. Sometimes fixing the process or using an API integration is better than automating a bad process.

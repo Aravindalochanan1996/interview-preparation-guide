@@ -398,3 +398,48 @@ Use `docker buildx build --platform linux/amd64,linux/arm64 -t repo/app:tag --pu
 
 ### How would you secure the container supply chain?
 Use minimal, pinned and trusted base images; scan in CI with Trivy/Grype; generate SBOMs; sign images with Cosign and verify signatures with admission controllers (Kyverno, Gatekeeper); use private registries with access control; rebuild frequently; and enforce non-root, read-only and dropped capabilities at runtime.
+
+# Scenario Questions
+
+## Beginner
+
+### Your container starts and exits immediately with code 0. Why?
+A container lives only as long as its **main process** (PID 1). If the command finishes (a script runs and exits, a service daemonises into the background, or `CMD` is a shell that ends), the container stops. Run the process in the foreground (`nginx -g 'daemon off;'`, `node server.js`) and check with `docker logs` and `docker inspect --format '{{.State.ExitCode}}'`.
+
+### The app inside the container works, but `localhost:3000` on your machine can't reach it. What's wrong?
+- Either the port isn't published (`-p 3000:3000`), or
+- the app binds to `127.0.0.1` **inside** the container, which is unreachable from outside. Bind to `0.0.0.0`.
+
+Check `docker ps` for the port mapping.
+
+## Intermediate
+
+### Every code change triggers a 5-minute `npm install` in your Docker build. How do you fix it?
+Order the layers for **caching**: copy `package*.json` first, run `npm ci`, *then* copy the source. Add a `.dockerignore` (node_modules, .git, dist), use BuildKit cache mounts (`RUN --mount=type=cache,target=/root/.npm npm ci`), and use multi-stage builds so the final image only holds production output.
+
+### Your image is 1.8 GB. How do you shrink it?
+- Multi-stage build: build in a full image, copy only the artifacts into `node:22-slim`, alpine, or distroless.
+- Remove dev dependencies (`npm ci --omit=dev`).
+- Clean package manager caches in the same `RUN` layer.
+- Use `.dockerignore`.
+- Inspect layers with `docker history` or `dive`.
+
+## Advanced
+
+### `docker stop` takes 10 seconds and your app never runs its graceful shutdown. Why?
+The app isn't PID 1, or doesn't handle **SIGTERM**. With shell-form `CMD npm start`, `sh` or `npm` receives the signal and doesn't forward it, so Docker sends SIGKILL after the timeout. Use exec form (`CMD ["node","server.js"]`), handle SIGTERM in code (stop accepting requests, drain, close the DB), or use `--init`/tini to reap zombies and forward signals.
+
+# Tricky Questions
+
+## Beginner
+
+### What's the difference between these? `CMD ["npm", "start"]` vs `ENTRYPOINT ["npm"]` + `CMD ["start"]`
+With only `CMD`, `docker run img bash` replaces the whole command. With `ENTRYPOINT` plus `CMD`, the arguments you pass replace only `CMD`, so `docker run img test` runs `npm test`. The entrypoint is the fixed executable and CMD supplies the default arguments.
+
+## Intermediate
+
+### You deleted a secret in a later layer: `COPY .env .` then `RUN rm .env`. Is the secret gone from the image?
+**No.** Every layer is kept, so the file still exists in the `COPY` layer and anyone with the image can extract it (`docker save`). Use BuildKit secrets (`RUN --mount=type=secret,id=npmrc …`), runtime environment variables or secret managers, and rotate anything that leaked.
+
+### Why does `RUN apt-get update` followed by `RUN apt-get install -y curl` sometimes install stale or missing packages?
+The `update` layer is **cached** from an old build while the install layer reruns, so the package lists are out of date. Combine them: `RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*`.

@@ -502,3 +502,81 @@ Use project references with `tsc -b` and incremental builds, `skipLibCheck`, `is
 
 ### What's the difference between `declare`, `.d.ts` files and module augmentation?
 `declare` describes things that exist at runtime but aren't defined in TS (globals, external libs). `.d.ts` files contain only declarations. Module augmentation (`declare module 'x' { … }`) adds to an existing module's types — e.g., adding `user` to Express's `Request`.
+
+# Scenario Questions
+
+## Beginner
+
+### Your API returns data your types say can't exist, and the app crashes at runtime. How do you protect yourself?
+TypeScript types disappear at runtime, so a `fetch` result typed `as User` is just a promise you made to the compiler. Validate at the boundary with a schema library (**Zod**, Valibot, io-ts):
+```ts
+const User = z.object({ id: z.number(), email: z.string().email() });
+type User = z.infer<typeof User>;
+const user = User.parse(await res.json()); // throws with a clear error if the shape is wrong
+```
+Or generate types and clients from an OpenAPI spec so the front end and back end can't drift apart.
+
+## Intermediate
+
+### You're migrating a 100k-line JavaScript codebase to TypeScript. What's your plan?
+1. Add `tsconfig` with `allowJs` and `checkJs: false`. Rename files to `.ts` gradually, starting with leaf modules and utilities.
+2. Start with `strict: false`, then enable flags one by one (`noImplicitAny`, then `strictNullChecks`, and so on). Use `// @ts-expect-error` sparingly and track how many remain.
+3. Install `@types/*` packages for dependencies, and write `.d.ts` files for the untyped ones.
+4. Type-check in CI (`tsc --noEmit`) so progress can't regress.
+5. Add types to the API boundary first, because those types catch the most bugs.
+
+### Adding a new value to a union broke production because one `switch` didn't handle it. How do you make the compiler catch this?
+Use **exhaustiveness checking** with `never`:
+```ts
+type Status = 'active' | 'paused' | 'deleted';
+function label(s: Status) {
+  switch (s) {
+    case 'active': return 'Active';
+    case 'paused': return 'Paused';
+    default: { const _exhaustive: never = s; return _exhaustive; } // error if a case is missing
+  }
+}
+```
+Or use `satisfies Record<Status, string>` for lookup objects.
+
+## Advanced
+
+### Your monorepo's `tsc` takes 4 minutes and editor IntelliSense is sluggish. How do you speed it up?
+- Use **project references** (`composite: true`, `tsc -b`) so packages build incrementally.
+- Turn on `incremental`, and `skipLibCheck: true`.
+- Narrow `include` so it doesn't type-check `dist` or `node_modules`.
+- Avoid huge inferred types and deep conditional or recursive types. Add explicit return types on exported APIs, and `isolatedDeclarations` where possible.
+- Type-check separately from transpiling (esbuild or swc for builds, `tsc --noEmit` in CI).
+- Profile with `--extendedDiagnostics` and `--generateTrace`.
+
+# Tricky Questions
+
+## Beginner
+
+### Does this compile? `const a: number[] = []; const b = a as unknown as string[]; b.push('x');`
+Yes. A double assertion through `unknown` silences the compiler completely. At runtime `a` and `b` are the same array, so `a` now holds a string. Type assertions are not conversions, which is why validation beats `as`.
+
+### What's the difference between `any` and `unknown` here?
+```ts
+let x: any = 'hi';     x.foo.bar();  // compiles, crashes at runtime
+let y: unknown = 'hi'; y.toUpperCase(); // error: must narrow first
+```
+`any` switches off type checking. `unknown` accepts any value but forces you to narrow it (`typeof y === 'string'`) before you use it. Prefer `unknown` for untrusted data.
+
+## Intermediate
+
+### Why does this error? `const config = { mode: 'dark' }; setTheme(config.mode);` where `setTheme(m: 'dark' | 'light')`
+`config.mode` is **widened** to `string`, because object properties are mutable. Fix it with `as const` (`{ mode: 'dark' } as const`), an explicit type annotation, or `satisfies { mode: 'dark' | 'light' }`.
+
+### What's the type of `T` here? `type T = keyof { a: 1 } | keyof { b: 2 }` versus `keyof ({ a: 1 } | { b: 2 })`
+The first is `'a' | 'b'`. The second is **`never`**, because `keyof` of a union returns only the keys common to **every** member, and there are none here. `keyof (A & B)` gives `'a' | 'b'`.
+
+## Advanced
+
+### Why does this compile, even though it's unsafe?
+```ts
+const dogs: Dog[] = [];
+const animals: Animal[] = dogs;
+animals.push(new Cat());
+```
+Arrays in TypeScript are **covariant** (unsoundly, for convenience), so `Dog[]` is assignable to `Animal[]` and a `Cat` slips into the dogs array. Use `readonly Animal[]` for parameters you don't mutate. Method parameters are likewise **bivariant**; `strictFunctionTypes` only makes function-typed *properties* contravariant.

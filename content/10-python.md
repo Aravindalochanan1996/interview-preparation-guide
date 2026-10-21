@@ -601,3 +601,81 @@ Measure with cProfile/py-spy to find hotspots, then fix algorithms and data stru
 
 ### Explain how `asyncio` works under the hood.
 Coroutines are generator-like objects that suspend at `await`. The event loop schedules ready tasks, and when a task awaits I/O, it registers interest with the OS selector (epoll/kqueue) and switches to another task. When I/O is ready, the loop resumes the waiting coroutine. All of this happens on one thread through cooperative yielding.
+
+# Scenario Questions
+
+## Beginner
+
+### Your script works on your laptop but fails on the server with `ModuleNotFoundError`. How do you make it reproducible?
+Use a **virtual environment** per project (`python -m venv .venv`, or `uv`/Poetry) and pin dependencies (`requirements.txt` from `pip freeze`, or a lock file). Check that the server uses the same Python version (`python --version`, `pyproject` `requires-python`). Run it as a module (`python -m app`) so imports resolve from the project root, and ideally ship it in a Docker image.
+
+## Intermediate
+
+### A script calls 500 HTTP APIs one after another and takes 10 minutes. How do you speed it up?
+The work is **I/O-bound**, so run it concurrently:
+- `asyncio` with `httpx.AsyncClient` and a `Semaphore` to cap concurrency, or
+- `concurrent.futures.ThreadPoolExecutor`.
+
+Reuse one client session (connection pooling), and add timeouts, retries with backoff, and rate limiting. Multiprocessing would only help for CPU-bound work, because of the GIL.
+
+### A data job loads a 20 GB CSV with pandas and runs out of memory. What are your options?
+- Read in chunks (`pd.read_csv(..., chunksize=100_000)`) and aggregate incrementally.
+- Load only the columns you need (`usecols`) with smaller dtypes (`category`, `int32`).
+- Use a columnar format (Parquet).
+- Use out-of-core or faster tools: **Polars** (lazy, streaming), **DuckDB** (SQL over the file), or Dask/Spark for distributed work.
+
+## Advanced
+
+### A CPU-heavy image-processing service only uses one of 16 cores. Why, and what do you do?
+The **GIL** lets only one thread run Python bytecode at a time, so threads don't parallelise CPU-bound pure-Python work. Options:
+- `multiprocessing` / `ProcessPoolExecutor`, or several worker processes (gunicorn workers, Celery)
+- libraries that release the GIL (NumPy, Pillow-SIMD, OpenCV)
+- the C/Rust extensions they're built on
+- Python 3.13+ free-threaded builds, where they're supported
+
+# Tricky Questions
+
+## Beginner
+
+### What does this print?
+```python
+def add(item, bucket=[]):
+    bucket.append(item)
+    return bucket
+print(add(1), add(2))
+```
+`[1, 2] [1, 2]`. Default arguments are evaluated **once**, when the function is defined, so every call shares the same list, and both printed references point at it. Use `bucket=None` with `if bucket is None: bucket = []`.
+
+### What's the output? `a = [[0] * 3] * 3; a[0][0] = 1; print(a)`
+`[[1, 0, 0], [1, 0, 0], [1, 0, 0]]`. The outer `* 3` copies **references** to the same inner list. Use `[[0] * 3 for _ in range(3)]`.
+
+### Is `256 is 256` True? What about `a = 1000; b = 1000; a is b`?
+CPython caches small integers from -5 to 256, so identity checks on them happen to be True. For 1000 the result depends on the implementation (it's often False in the REPL and True inside one compiled code block). `is` checks **identity**; use `==` for values. Reserve `is` for `None`, `True` and `False`.
+
+## Intermediate
+
+### What does this print?
+```python
+funcs = [lambda: i for i in range(3)]
+print([f() for f in funcs])
+```
+`[2, 2, 2]`. Closures capture the **variable**, not its value, and look it up when called (late binding). Fix it with a default argument: `lambda i=i: i`.
+
+### What is printed?
+```python
+x = 10
+def f():
+    print(x)
+    x = 20
+f()
+```
+`UnboundLocalError`. Because `x` is assigned somewhere in `f`, Python treats it as local for the **whole** function body, so the `print` reads it before assignment. Use `global x` or `nonlocal`, or rename the variable.
+
+## Advanced
+
+### Why does modifying a dict while iterating raise an error, but a list doesn't?
+```python
+d = {1: 'a', 2: 'b'}
+for k in d: d[k + 10] = 'x'   # RuntimeError: dictionary changed size during iteration
+```
+Dicts detect size changes during iteration. Lists don't, and silently skip or repeat elements instead (for example removing items while iterating). Iterate over a copy (`list(d)`, `lst[:]`) or build a new collection.

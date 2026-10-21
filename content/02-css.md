@@ -474,3 +474,63 @@ Tells the browser to skip layout and paint for off-screen content until it nears
 
 ### CSS-in-JS vs CSS Modules vs Tailwind — trade-offs?
 CSS-in-JS: co-location and dynamic props, but runtime cost and SSR complexity (zero-runtime libs fix this). CSS Modules: plain CSS with local scoping, no runtime, less dynamic. Tailwind: fast iteration, consistent tokens, tiny output after purge, but verbose markup and a learning curve. Choice depends on team, SSR needs and design system.
+
+# Scenario Questions
+
+## Beginner
+
+### The page scrolls horizontally on mobile by a few pixels. How do you find the culprit?
+Something is wider than the viewport. In DevTools, add `* { outline: 1px solid red }` or run `[...document.querySelectorAll('*')].filter(e => e.scrollWidth > document.documentElement.clientWidth)` in the console. Usual causes:
+- `width: 100vw`, which includes the scrollbar
+- fixed widths
+- long unbroken words or URLs (use `overflow-wrap: anywhere`)
+- negative margins
+- images without `max-width: 100%`
+
+Fix the element itself instead of hiding the problem with `overflow-x: hidden` on `body`.
+
+### Your `z-index: 9999` modal still appears under the header. Why?
+z-index only competes **within the same stacking context**. If the modal sits inside a parent that creates its own stacking context (`transform`, `opacity < 1`, `filter`, `position` with a `z-index`, `isolation: isolate`), it can never rise above siblings of that parent. Render the modal at the root (a React/Vue **portal** or `<dialog>` with `showModal()`, which uses the top layer), or remove the property that creates the context.
+
+## Intermediate
+
+### A card grid needs 4 columns on desktop, 2 on tablet and 1 on mobile, with no media queries. How?
+```css
+.grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+}
+```
+`auto-fill` with `minmax` creates as many columns as fit, and `min(240px, 100%)` stops overflow on very small screens. Use **container queries** (`@container`) when a component must adapt to its own width instead of the viewport's.
+
+## Advanced
+
+### Animations on your dashboard are janky (dropped frames). How do you diagnose and fix them?
+Record in the DevTools **Performance** panel and look for long Layout and Paint events. Animate only `transform` and `opacity`, which the compositor handles, instead of `top`, `left`, `width` or `box-shadow`. Use `will-change` sparingly, avoid layout thrashing (reading `offsetHeight` and then writing styles in a loop), contain expensive areas with `contain: layout paint` or `content-visibility: auto`, and respect `prefers-reduced-motion`.
+
+# Tricky Questions
+
+## Beginner
+
+### Two sibling divs have `margin-bottom: 30px` and `margin-top: 20px`. What's the gap between them?
+**30px**, not 50px. Vertical margins between block elements **collapse** to the larger of the two. They don't collapse in flex or grid containers, between floats, or when padding or a border separates parent and child margins.
+
+### Which color wins?
+```css
+#nav a { color: red; }
+.menu .link:hover { color: blue; }
+a { color: green !important; }
+```
+**Green**, because `!important` beats normal declarations whatever their specificity. Without it, `#nav a` (1,0,1) beats `.menu .link:hover` (0,3,0) even on hover, because a single id outweighs any number of classes.
+
+## Intermediate
+
+### Why doesn't `height: 100%` work on my div?
+A percentage height resolves against the parent's **explicit** height. If the parent's height is `auto`, the percentage behaves like `auto`. Give each ancestor a height, or use `min-height: 100dvh`, flexbox (`flex: 1`) or grid instead.
+
+### `position: sticky` does nothing. What are the common reasons?
+- No `top` (or `bottom`) value is set.
+- An ancestor has `overflow: hidden`, `auto` or `scroll`, so the element sticks within that ancestor instead of the viewport.
+- The parent is only as tall as the sticky element, so there's no room to stick.
+- In a flex container, the item is stretched; use `align-self: flex-start`.

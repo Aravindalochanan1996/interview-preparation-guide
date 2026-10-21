@@ -383,3 +383,46 @@ Multi-stage non-root images scanned in CI, secrets from a secret manager, least-
 
 ### If you rebuilt your project today, what would you change?
 Show reflection: choices that didn't scale or slowed you down (e.g., premature microservices, missing tests, weak data model), what you learned since, and concrete alternatives with trade-offs. This demonstrates growth and engineering judgement.
+
+# Scenario Questions
+
+## Beginner
+
+### "Tell me about a project you built." How do you structure the answer?
+Use a short **STAR** structure, technical edition:
+- **Situation/goal**: what the app does and who it's for.
+- **Architecture**: the stack and *why* you chose it.
+- **Your hardest problem**: the bug or design decision, how you debugged it, and the trade-off you made.
+- **Result**: it's live, tested and deployed, with numbers where possible (load time, test coverage).
+- **What you'd change next**.
+
+Have the repo and a live demo ready, and expect follow-ups on every technology you mention.
+
+## Intermediate
+
+### Your deployed full-stack project works locally but the live site shows a blank page and CORS errors. How do you debug it?
+Open the browser console and network tab:
+- Is the front end calling `localhost` instead of the production API URL? Check build-time env vars.
+- Does the API allow the production origin?
+- Do the HTTPS and mixed-content rules hold?
+- Is the reverse proxy serving `index.html` for client routes?
+
+Check the server logs and make sure env vars and secrets are set in the hosting platform.
+
+## Advanced
+
+### An interviewer asks: "Your URL shortener now gets 10× the traffic. What breaks first and what do you do?"
+Work through the bottlenecks in order:
+1. The **database** read load on redirects: add a Redis cache for hot codes and read replicas.
+2. **ID generation** contention: switch to pre-allocated ranges or Snowflake-style IDs.
+3. **Stateless app servers**: scale horizontally behind a load balancer.
+4. **Analytics writes**: move them asynchronously through a queue.
+
+Back each step with metrics: show dashboards, load-test results (k6) and the SLOs you'd watch.
+
+# Tricky Questions
+
+## Intermediate
+
+### Your project's README says "uses microservices" for a 3-page app. Is that a strength in an interview?
+Usually not, unless you can justify it. Interviewers probe *why*. A well-structured **modular monolith** with clear boundaries, tests and CI/CD often impresses more. Be ready to explain the operational cost of microservices (network failures, distributed tracing, data consistency) and when you'd split a service out.

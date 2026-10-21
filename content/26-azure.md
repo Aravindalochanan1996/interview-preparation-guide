@@ -381,3 +381,38 @@ Right-size via Advisor, use reservations and savings plans, Azure Hybrid Benefit
 
 ### Bicep vs ARM vs Terraform?
 ARM templates are verbose JSON consumed by Azure Resource Manager. Bicep is a concise, type-safe DSL that compiles to ARM, with day-zero support for new Azure features and no state file. Terraform is multi-cloud with a large provider ecosystem and explicit state management. Choose Bicep for Azure-only teams, Terraform for multi-cloud or existing Terraform expertise.
+
+# Scenario Questions
+
+## Beginner
+
+### Your App Service web app shows "503 Service Unavailable" after a deploy. How do you troubleshoot it?
+- Check **Log stream** and the Diagnose and solve problems blade.
+- The app may fail at start-up: a wrong start-up command or runtime stack, missing app settings or connection strings, or the app listening on the wrong port (on Linux, set `WEBSITES_PORT`).
+- Use deployment slots with a warm-up step to catch this before a swap.
+
+## Intermediate
+
+### Your app stores a database password in `appsettings.json`. How should it be handled in Azure?
+Use a **Managed Identity** so the app authenticates to Azure SQL, Storage or Key Vault with no secret at all. For secrets that must exist, keep them in **Key Vault** and reference them from App Service settings (`@Microsoft.KeyVault(...)`). Grant access with RBAC, and enable rotation and soft-delete.
+
+### A Function App on the Consumption plan has a slow first request in the morning. How do you fix it?
+That's a **cold start**. Use the **Flex Consumption** plan with always-ready instances, or the Premium plan with pre-warmed instances. Reduce package size and start-up work, and keep a lightweight timer ping only if your budget rules allow it.
+
+## Advanced
+
+### Design network isolation so your App Service can reach Azure SQL privately and SQL isn't exposed to the internet.
+- Put SQL behind a **Private Endpoint** in a VNet and disable public network access.
+- Use **VNet integration** for the App Service's outbound traffic.
+- Link a Private DNS zone (`privatelink.database.windows.net`) to the VNet.
+- Lock down NSGs, use Front Door with a WAF for inbound traffic, and audit with Azure Policy.
+
+# Tricky Questions
+
+## Intermediate
+
+### Is an Azure Resource Group a security or networking boundary?
+Neither. It's a **lifecycle and management** container: you deploy, tag, apply RBAC and delete resources together. Resources in different resource groups can talk freely, and one VNet can span resources from many RGs. Isolation comes from VNets, NSGs, subscriptions and RBAC scopes.
+
+### A user has `Contributor` on a subscription. Can they grant access to other users?
+**No.** Contributor can manage resources but not RBAC assignments. Assigning roles needs `Owner`, `User Access Administrator` or `Role Based Access Control Administrator`. Azure AD (Entra ID) roles are a separate system from Azure RBAC.
