@@ -106,6 +106,18 @@ When multiple rules target the same element, the browser decides using the **cas
 3. **Specificity**.
 4. **Source order** — the last declared wins.
 
+```css
+@layer reset, components, utilities;          /* later layer wins regardless of specificity */
+@layer components { #nav .link { color: navy; } }
+@layer utilities  { .text-red { color: red; } } /* beats #nav .link */
+
+p { color: gray; }            /* 0,0,1 */
+.note { color: blue; }        /* 0,1,0 — wins over p */
+#main .note { color: green; } /* 1,1,0 — wins over .note */
+.card { color: teal; }        /* inherited by children unless they set color */
+.card a { color: inherit; }   /* force inheritance for a non-inheriting default */
+```
+
 ### Specificity as (a, b, c)
 - **a** — ID selectors
 - **b** — classes, attributes, pseudo-classes
@@ -399,81 +411,306 @@ body { background: var(--bg); color: var(--text); }
 ### Explain the CSS box model.
 Every element is a box of content, padding, border and margin. With `box-sizing: content-box` (default), `width` sets only the content; padding and border are added on top. With `border-box`, `width` includes padding and border, which makes layouts predictable.
 
+```css
+.box {
+  width: 200px; padding: 20px; border: 5px solid; margin: 10px;
+}
+/* content-box: rendered width = 200 + 40 + 10 = 250px */
+*, *::before, *::after { box-sizing: border-box; } /* now rendered width = 200px */
+```
+
 ### What's the difference between `display: none` and `visibility: hidden`?
 `display: none` removes the element from layout and the accessibility tree — it takes no space. `visibility: hidden` hides it but keeps its space. `opacity: 0` keeps it in layout and it still receives clicks.
+
+```css
+.gone      { display: none; }       /* no space, not in a11y tree, no events */
+.invisible { visibility: hidden; }  /* keeps space, not in a11y tree, no events */
+.faded     { opacity: 0; }          /* keeps space, still focusable & clickable! */
+```
 
 ### How is specificity calculated?
 As a tuple (IDs, classes/attributes/pseudo-classes, elements/pseudo-elements), compared left to right. Inline styles beat selectors, `!important` beats normal declarations. Equal specificity → last rule wins. `:where()` adds zero; `:is()`/`:not()`/`:has()` take their most specific argument.
 
+```css
+li                     { }  /* (0,0,1) */
+ul li.active           { }  /* (0,1,2) */
+#menu a:hover          { }  /* (1,1,1) */
+:is(#menu, .nav) a     { }  /* (1,0,1) — :is() takes its most specific argument */
+:where(#menu, .nav) a  { }  /* (0,0,1) — :where() is always 0 */
+.btn { color: red !important; } /* beats everything non-important */
+```
+
 ### `em` vs `rem`?
 `rem` is relative to the root (`html`) font size; `em` is relative to the current element's font size (for `font-size` itself, the parent's). `em` compounds in nested elements; `rem` is predictable. Both respect the user's browser font settings, unlike `px`.
+
+```css
+html { font-size: 16px; }
+.parent { font-size: 1.25em; }   /* 20px */
+.parent .child { font-size: 1.25em; } /* 25px — em compounds */
+.parent .child2 { font-size: 1.25rem; } /* 20px — always relative to html */
+.button { padding: 0.5em 1em; }  /* em for spacing that scales with the button's own text */
+```
 
 ### What are pseudo-classes and pseudo-elements?
 Pseudo-classes select elements in a state or position (`:hover`, `:focus`, `:nth-child()`, `:checked`). Pseudo-elements style a part of an element or insert virtual content (`::before`, `::after`, `::placeholder`, `::first-line`). Pseudo-elements use double colons.
 
+```css
+a:hover, a:focus-visible { text-decoration: underline; }  /* pseudo-classes: state */
+li:nth-child(odd) { background: #f6f6f6; }
+input:checked + label { font-weight: bold; }
+
+.quote::before { content: "“"; }        /* pseudo-elements: part of an element */
+p::first-line { font-variant: small-caps; }
+::selection { background: gold; }
+```
+
 ### Explain the `position` values.
 `static` (normal flow), `relative` (offset from its normal position, still occupies space), `absolute` (out of flow, relative to nearest positioned ancestor), `fixed` (relative to viewport), `sticky` (relative until a scroll threshold, then fixed within its container).
+
+```css
+.card     { position: relative; }               /* containing block for children */
+.badge    { position: absolute; top: 8px; right: 8px; }
+.toast    { position: fixed; bottom: 16px; right: 16px; }
+.thead th { position: sticky; top: 0; background: white; }
+```
 
 ### How do you center a div?
 Horizontally for a block: `margin: 0 auto` with a width. Both axes: parent `display: flex; justify-content: center; align-items: center;` or `display: grid; place-items: center;`. For absolute: `top:50%; left:50%; transform: translate(-50%,-50%)` or `inset: 0; margin: auto`.
 
+```css
+.parent-grid { display: grid; place-items: center; min-height: 100vh; }
+
+.parent-flex { display: flex; justify-content: center; align-items: center; }
+
+.block { width: 600px; margin-inline: auto; }   /* horizontal only */
+
+.overlay { position: absolute; inset: 0; margin: auto; width: 300px; height: 200px; }
+```
+
 ### What is margin collapsing?
 Adjacent vertical margins of block elements combine into a single margin equal to the larger one. It occurs between siblings, parent and first/last child (with no padding/border between), and empty blocks. It doesn't happen in flex/grid containers or BFC boundaries.
+
+```css
+.a { margin-bottom: 30px; }
+.b { margin-top: 20px; }    /* gap = 30px, not 50px */
+
+.parent { margin-top: 0; }
+.parent > h1 { margin-top: 40px; } /* escapes and pushes the parent down */
+.parent { display: flow-root; }    /* fix: new BFC stops the collapse (or padding/border) */
+```
 
 ## Intermediate
 
 ### Flexbox vs Grid — when do you use each?
 Flexbox is one-dimensional and content-out: great for distributing items along a row or column (toolbars, nav, centering). Grid is two-dimensional and layout-in: define rows and columns, then place items (page layouts, galleries). They combine well — Grid for the shell, Flex inside components.
 
+```css
+/* Flexbox: a row of items sized by their content */
+.toolbar { display: flex; gap: 8px; align-items: center; }
+.toolbar .spacer { margin-left: auto; }
+
+/* Grid: a 2-D page layout */
+.page {
+  display: grid;
+  grid-template: "header header" auto "sidebar main" 1fr "footer footer" auto / 240px 1fr;
+}
+.page > header { grid-area: header; }
+```
+
 ### What does `flex: 1` mean?
 Shorthand for `flex-grow: 1; flex-shrink: 1; flex-basis: 0%`. Items ignore their content size as a starting point and split free space equally.
+
+```css
+.item { flex: 1; }          /* = flex: 1 1 0% → equal columns regardless of content */
+.item { flex: auto; }       /* = flex: 1 1 auto → grow from content size */
+.sidebar { flex: 0 0 250px; } /* fixed 250px, never grow or shrink */
+.main    { flex: 1; min-width: 0; } /* min-width:0 lets long content shrink */
+```
 
 ### What's the difference between `auto-fill` and `auto-fit`?
 Both create as many tracks as fit. `auto-fill` keeps empty tracks (items keep their min size), `auto-fit` collapses empty tracks to zero so existing items stretch to fill the row. The difference only shows when there are fewer items than slots.
 
+```css
+.fill { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+/* 2 items in a 1000px row → 2 items at 200px + 3 empty tracks */
+
+.fit  { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+/* 2 items in a 1000px row → 2 items stretched to 500px each */
+```
+
 ### What is a stacking context?
 A 3D layering group. Elements inside are stacked relative to each other and the whole context is painted as one unit in its parent. Created by positioned elements with `z-index`, `opacity < 1`, `transform`, `filter`, `isolation: isolate`, `will-change`, flex/grid children with `z-index`. A child can never escape its parent's stacking context, whatever its z-index.
+
+```css
+.header { position: relative; z-index: 10; }
+.content { transform: translateZ(0); }    /* creates a stacking context! */
+.content .modal { position: fixed; z-index: 9999; } /* still below .header */
+
+.isolated { isolation: isolate; }        /* explicit new context, no side effects */
+```
 
 ### How do CSS variables differ from Sass variables?
 Sass variables are compiled away at build time — static. CSS custom properties exist at runtime, cascade and inherit through the DOM, can be scoped to selectors and media queries, and can be read/changed with JavaScript. That makes them ideal for theming.
 
+```scss
+// Sass: compiled away
+$brand: #0a66c2;
+.btn { background: $brand; }       // → background: #0a66c2
+
+// CSS custom properties: live at runtime, cascade, themeable
+:root { --brand: #0a66c2; }
+[data-theme="dark"] { --brand: #66a3ff; }
+.btn { background: var(--brand, blue); }
+```
+```js
+document.documentElement.style.setProperty('--brand', 'tomato'); // change at runtime
+```
+
 ### What are container queries and why do they matter?
 They let a component style itself based on the size of its container (`container-type: inline-size` + `@container (min-width: …)`) rather than the viewport. This makes truly reusable components that adapt whether placed in a sidebar or main column.
+
+```css
+.card-wrapper { container-type: inline-size; container-name: card; }
+
+.card { display: grid; gap: 1rem; }
+@container card (min-width: 480px) {
+  .card { grid-template-columns: 160px 1fr; }  /* same component, side-by-side when there's room */
+}
+.card h2 { font-size: clamp(1rem, 4cqi, 1.75rem); } /* cqi = 1% of container width */
+```
 
 ### How do you make an image responsive?
 `max-width: 100%; height: auto;`, use `srcset`/`sizes` or `<picture>` to serve appropriate files, `aspect-ratio` or width/height attributes to avoid CLS, and `object-fit: cover` for cropping into fixed boxes.
 
+```css
+img { max-width: 100%; height: auto; display: block; }
+.avatar { width: 64px; aspect-ratio: 1; object-fit: cover; border-radius: 50%; }
+.hero   { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+```
+
 ### What does `:has()` do?
 It's a relational "parent" selector: `.card:has(img)` matches cards that contain an image; `label:has(+ input:invalid)` styles a label based on a sibling. It enables state-based styling that previously required JS.
 
+```css
+.card:has(img) { grid-template-rows: 200px auto; }       /* cards with an image */
+form:has(input:invalid) button[type=submit] { opacity: .5; }
+label:has(+ input:required)::after { content: " *"; color: crimson; }
+body:has(dialog[open]) { overflow: hidden; }             /* lock scroll when modal open */
+```
+
 ### How do you approach mobile-first design?
 Write base styles for the smallest screen, then add `min-width` media queries to enhance for larger screens. This keeps mobile CSS lean, forces content prioritisation and aligns with progressive enhancement.
+
+```css
+.nav { display: flex; flex-direction: column; }         /* base = phone */
+
+@media (min-width: 768px)  { .nav { flex-direction: row; } }
+@media (min-width: 1200px) { .container { max-width: 1140px; margin-inline: auto; } }
+
+@media (hover: hover) { .card:hover { transform: translateY(-2px); } } /* only for mice */
+```
 
 ## Advanced
 
 ### What is a Block Formatting Context and how is it useful?
 An independent layout region where block boxes are laid out vertically and floats are contained. Creating one (`display: flow-root`, `overflow: hidden`, flex/grid items, etc.) fixes parent height collapse with floats, stops margin collapsing through the boundary, and prevents content wrapping around floats.
 
+```css
+.float-left { float: left; width: 200px; }
+.wrapper { display: flow-root; }  /* contains the float, so the wrapper has height */
+.text    { overflow: hidden; }    /* BFC next to a float doesn't wrap around it */
+```
+
 ### Why does `z-index: 9999` sometimes not work?
 Because z-index is only compared within the same stacking context. If the element's ancestor creates a stacking context with a lower z-index (or via `transform`/`opacity`), the element can't appear above content in a sibling context. Fix by restructuring, using `isolation`, or rendering in a portal/top-layer (`<dialog>`, popover).
+
+```css
+.parent { position: relative; z-index: 1; }    /* context with z-index 1 */
+.parent .tooltip { position: absolute; z-index: 9999; } /* 9999 inside "1" */
+.sibling { position: relative; z-index: 2; }   /* paints above the whole .parent */
+/* Fix: move the tooltip out (portal) or raise .parent's z-index */
+```
 
 ### Which CSS properties are cheap to animate and why?
 `transform` and `opacity` — they can be handled by the compositor thread on the GPU without recalculating layout or repainting. Properties like `width`, `height`, `top`, `margin` trigger layout; `background-color`, `box-shadow` trigger paint.
 
+```css
+/* ❌ triggers layout every frame */
+.panel.open { left: 0; transition: left .3s; }
+
+/* ✅ compositor only */
+.panel      { transform: translateX(-100%); transition: transform .3s, opacity .3s; }
+.panel.open { transform: translateX(0); }
+
+@media (prefers-reduced-motion: reduce) { .panel { transition: none; } }
+```
+
 ### How would you architect CSS for a large application?
 Design tokens as custom properties; a component-scoped strategy (CSS Modules, BEM, or utility-first); cascade layers to order reset/base/components/utilities; low, flat specificity; a design system with documented components (Storybook); linting (Stylelint); and purging/critical CSS in the build.
+
+```css
+@layer reset, tokens, base, components, utilities;
+
+@layer tokens {
+  :root { --space-2: .5rem; --space-4: 1rem; --radius: 8px; --color-primary: #0a66c2; }
+}
+@layer components {
+  .c-button { padding: var(--space-2) var(--space-4); border-radius: var(--radius); }
+  .c-button--primary { background: var(--color-primary); color: white; }
+}
+@layer utilities { .u-mt-4 { margin-top: var(--space-4); } }
+```
 
 ### Explain cascade layers.
 `@layer` defines named layers whose order determines precedence before specificity is considered. Rules in a later layer beat an earlier layer even if less specific; unlayered styles beat all layers. It makes overriding third-party/reset CSS predictable without `!important`.
 
+```css
+@layer base, vendor, app;
+@import url("bootstrap.css") layer(vendor);
+
+@layer app  { .btn { background: green; } }           /* wins: later layer */
+@layer vendor { #form .btn.btn-primary { background: blue; } } /* more specific, still loses */
+
+.btn { background: red; } /* unlayered styles beat ALL layers */
+```
+
 ### What causes layout shift and how do you prevent it in CSS?
 Images/iframes without dimensions, web fonts swapping, dynamically injected content, and animations of layout properties. Prevent with `width`/`height` or `aspect-ratio`, reserved space (min-height) for ads/embeds, `font-display` with `size-adjust` fallback metrics, and animating `transform` instead of position.
+
+```css
+img, video { aspect-ratio: attr(width) / attr(height); height: auto; } /* or width/height attrs */
+.ad-slot { min-height: 250px; }                 /* reserve space for late content */
+@font-face {
+  font-family: Inter; src: url(inter.woff2) format("woff2");
+  font-display: swap; size-adjust: 107%;        /* fallback metrics close to the web font */
+}
+```
 
 ### What does `content-visibility: auto` do?
 Tells the browser to skip layout and paint for off-screen content until it nears the viewport, greatly reducing initial rendering work on long pages. Pair with `contain-intrinsic-size` so the scrollbar doesn't jump.
 
+```css
+.comment-section, .article-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px;  /* placeholder height so the scrollbar doesn't jump */
+}
+```
+
 ### CSS-in-JS vs CSS Modules vs Tailwind — trade-offs?
 CSS-in-JS: co-location and dynamic props, but runtime cost and SSR complexity (zero-runtime libs fix this). CSS Modules: plain CSS with local scoping, no runtime, less dynamic. Tailwind: fast iteration, consistent tokens, tiny output after purge, but verbose markup and a learning curve. Choice depends on team, SSR needs and design system.
+
+```jsx Same button three ways
+// CSS Modules
+import s from './Button.module.css';      // .primary { background: blue }
+<button className={s.primary}>Save</button>
+
+// CSS-in-JS (styled-components)
+const Btn = styled.button`background: ${(p) => (p.danger ? 'red' : 'blue')};`;
+<Btn danger>Delete</Btn>
+
+// Tailwind
+<button className="bg-blue-600 px-4 py-2 rounded hover:bg-blue-700">Save</button>
+```
 
 # Scenario Questions
 
@@ -489,8 +726,28 @@ Something is wider than the viewport. In DevTools, add `* { outline: 1px solid r
 
 Fix the element itself instead of hiding the problem with `overflow-x: hidden` on `body`.
 
+```js Paste in the DevTools console
+const w = document.documentElement.clientWidth;
+[...document.querySelectorAll('*')]
+  .filter((el) => el.getBoundingClientRect().right > w)
+  .forEach((el) => { console.log(el); el.style.outline = '2px solid red'; });
+```
+```css Common fixes
+img, video, iframe { max-width: 100%; }
+.full-bleed { width: 100%; }  /* not 100vw — 100vw includes the scrollbar */
+pre { overflow-x: auto; }
+```
+
 ### Your `z-index: 9999` modal still appears under the header. Why?
 z-index only competes **within the same stacking context**. If the modal sits inside a parent that creates its own stacking context (`transform`, `opacity < 1`, `filter`, `position` with a `z-index`, `isolation: isolate`), it can never rise above siblings of that parent. Render the modal at the root (a React/Vue **portal** or `<dialog>` with `showModal()`, which uses the top layer), or remove the property that creates the context.
+
+```css
+.layout { transform: translateZ(0); } /* ← accidental stacking context around the modal */
+.layout .modal { position: fixed; z-index: 9999; }
+.header { position: sticky; z-index: 100; } /* outside .layout → wins */
+
+/* Fix: render the modal as a direct child of <body> (portal) or use <dialog> (top layer) */
+```
 
 ## Intermediate
 
@@ -509,12 +766,26 @@ z-index only competes **within the same stacking context**. If the modal sits in
 ### Animations on your dashboard are janky (dropped frames). How do you diagnose and fix them?
 Record in the DevTools **Performance** panel and look for long Layout and Paint events. Animate only `transform` and `opacity`, which the compositor handles, instead of `top`, `left`, `width` or `box-shadow`. Use `will-change` sparingly, avoid layout thrashing (reading `offsetHeight` and then writing styles in a loop), contain expensive areas with `contain: layout paint` or `content-visibility: auto`, and respect `prefers-reduced-motion`.
 
+```css
+/* Before: animating height re-layouts the whole grid */
+.chart { transition: height .3s; }
+
+/* After */
+.chart { transform-origin: bottom; transition: transform .3s; will-change: transform; }
+.chart.grow { transform: scaleY(1.5); }
+```
+
 # Tricky Questions
 
 ## Beginner
 
 ### Two sibling divs have `margin-bottom: 30px` and `margin-top: 20px`. What's the gap between them?
 **30px**, not 50px. Vertical margins between block elements **collapse** to the larger of the two. They don't collapse in flex or grid containers, between floats, or when padding or a border separates parent and child margins.
+
+```css
+.a { margin-bottom: 30px; } .b { margin-top: 20px; }  /* block flow → 30px */
+.parent { display: flex; flex-direction: column; }   /* flex → 50px (no collapsing) */
+```
 
 ### Which color wins?
 ```css
@@ -529,8 +800,22 @@ a { color: green !important; }
 ### Why doesn't `height: 100%` work on my div?
 A percentage height resolves against the parent's **explicit** height. If the parent's height is `auto`, the percentage behaves like `auto`. Give each ancestor a height, or use `min-height: 100dvh`, flexbox (`flex: 1`) or grid instead.
 
+```css
+html, body { height: 100%; }     /* every ancestor needs a definite height */
+.full { height: 100%; }
+
+.full-modern { min-height: 100dvh; } /* simpler: dynamic viewport height */
+```
+
 ### `position: sticky` does nothing. What are the common reasons?
 - No `top` (or `bottom`) value is set.
 - An ancestor has `overflow: hidden`, `auto` or `scroll`, so the element sticks within that ancestor instead of the viewport.
 - The parent is only as tall as the sticky element, so there's no room to stick.
 - In a flex container, the item is stretched; use `align-self: flex-start`.
+
+```css
+.sidebar { position: sticky; top: 0; }          /* top is required */
+.wrapper { overflow: hidden; }                  /* ❌ breaks sticky — use overflow: clip */
+.wrapper { overflow: clip; }                    /* ✅ clips without a scroll container */
+.row { display: flex; align-items: flex-start; }/* stretch makes the item as tall as the row */
+```

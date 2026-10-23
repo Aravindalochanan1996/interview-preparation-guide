@@ -15,6 +15,13 @@ summary: Testing fundamentals, SDLC/STLC, test design techniques, levels and typ
 
 Software testing is the process of **evaluating a system to find defects and verify it meets requirements**. Testing shows the *presence* of bugs, never their absence.
 
+```js Error → defect → failure, in code
+// Error: developer misreads "discount for orders over 100" as ">= 100"
+function discount(total) { return total >= 100 ? total * 0.1 : 0; }   // defect (fault) in code
+// Failure: observed when the defective line runs
+test('no discount at exactly 100', () => expect(discount(100)).toBe(0)); // ❌ fails: got 10
+```
+
 ### Key terms
 | Term | Meaning |
 |---|---|
@@ -39,6 +46,16 @@ Software testing is the process of **evaluating a system to find defects and ver
 A defect found in requirements may cost 1×; in production it can cost 100× or more (rework, support, reputation). This is why reviews and early testing matter.
 
 ## SDLC, STLC and Where Testing Fits
+
+```text V-model: each build phase has a matching test level
+Requirements ─────────────────────── Acceptance tests   (UAT scripts)
+   System design ────────────────── System tests        (E2E suites)
+      Architecture ──────────────── Integration tests   (API + DB)
+         Code ───────────────────── Unit tests          (Jest / JUnit / pytest)
+```
+```yaml Agile: testing runs in every pipeline stage
+stages: [lint, unit, build, integration, deploy-staging, e2e-smoke, deploy-prod]
+```
 
 ### SDLC models
 - **Waterfall** — sequential phases; testing happens after development. Simple but late feedback.
@@ -70,6 +87,17 @@ Maps each requirement to its test cases (and defects) — ensures **every requir
 | **System** | the complete integrated system against requirements | QA team | full end-to-end checkout flow |
 | **Acceptance (UAT)** | does it meet business needs? | users/business/PO | business users validate the invoice process |
 
+```js
+// Unit
+test('calculateTax', () => expect(calculateTax(100, 'DE')).toBe(19));
+// Integration (real DB via test container)
+test('saves order', async () => { await repo.save(order); expect(await repo.find(order.id)).toMatchObject(order); });
+// System / E2E (Playwright)
+test('checkout', async ({ page }) => { await page.goto('/'); /* … */ await expect(page.getByText('Order confirmed')).toBeVisible(); });
+// Acceptance (Gherkin)
+// Given a logged-in customer  When they pay with a valid card  Then they see the confirmation
+```
+
 ### Integration approaches
 - **Big bang** — integrate everything at once (hard to localise defects).
 - **Top-down** — test from top modules using **stubs** for lower ones.
@@ -80,6 +108,16 @@ Maps each requirement to its test cases (and defects) — ensures **every requir
 **Alpha** (internal users at the developer site), **beta** (real users in their environment), **contract/regulatory** acceptance, **operational** acceptance (backups, DR, maintainability).
 
 ## Types of Testing
+
+```js
+// Functional: does it do the right thing?
+test('rejects expired coupon', async () => expect(await applyCoupon('OLD10')).toEqual({ error: 'expired' }));
+// Non-functional: performance (k6)
+// export const options = { thresholds: { http_req_duration: ['p(95)<300'] } };
+// Non-functional: accessibility (axe + Playwright)
+const results = await new AxeBuilder({ page }).analyze();
+expect(results.violations).toEqual([]);
+```
 
 ### Functional vs non-functional
 - **Functional** — *what* the system does: features, business rules, inputs/outputs.
@@ -112,6 +150,15 @@ Maps each requirement to its test cases (and defects) — ensures **every requir
 
 ## Writing Good Test Cases
 
+```gherkin Same test case as an executable scenario
+Feature: Login
+  Scenario: TC_LOGIN_003 Login fails with wrong password
+    Given the user "asha@test.com" exists and is active
+    When she logs in with password "Wrong@123"
+    Then she sees the error "Invalid email or password"
+    And she stays on the login page
+```
+
 ### Anatomy of a test case
 | Field | Example |
 |---|---|
@@ -138,6 +185,22 @@ Valid login · invalid password · unregistered email · empty fields · SQL/scr
 # Intermediate
 
 ## Test Design Techniques
+
+```js Boundary values + equivalence classes for "age 18–60"
+test.each([
+  [17, false], [18, true], [19, true],     // lower boundary
+  [59, true], [60, true], [61, false],     // upper boundary
+  [35, true],                              // valid partition representative
+  ['abc', false], [null, false],           // invalid partitions
+])('isEligible(%p) → %p', (age, expected) => expect(isEligible(age)).toBe(expected));
+```
+```text Decision table: free shipping
+member? | total ≥ 50 | → free shipping
+  Y     |    Y       |   Y
+  Y     |    N       |   Y
+  N     |    Y       |   Y
+  N     |    N       |   N
+```
 
 ### Equivalence Partitioning (EP)
 Divide inputs into classes where all values should behave the same; test one value per class.
@@ -174,6 +237,14 @@ When many parameters combine (browser × OS × language × payment method), test
 - **Path coverage** — every path (often infeasible).
 
 ## Defect Lifecycle and Reporting
+
+```markdown Bug report template
+**Title:** Checkout total ignores coupon when cart has 10+ items
+**Env:** staging build 2026.10.22-3, Chrome 130, Windows 11
+**Steps:** 1. Add 10× SKU A1  2. Apply coupon SAVE10  3. Open checkout
+**Expected:** total €90.00   **Actual:** total €100.00
+**Severity:** High   **Priority:** P1   **Evidence:** screenshot.png, HAR file, request id 7f3a…
+```
 
 ### Defect lifecycle
 `New → Assigned → Open → Fixed → Ready for retest → Retest → Verified → Closed`
@@ -234,6 +305,14 @@ Avoid the **ice-cream cone** anti-pattern (mostly manual and UI tests). Variants
 
 ## Test Planning, Estimation and Risk-Based Testing
 
+```text Risk matrix → effort
+Feature            Likelihood  Impact  Risk  Testing depth
+Payments              High      High    9    full regression + exploratory + security
+Login / SSO           Med       High    6    automated suite + negative cases
+Order history         Low       Med     2    smoke only
+Theme switcher        Low       Low     1    skip this release
+```
+
 ### Test plan contents (IEEE 829-inspired)
 Scope (in/out) · test objectives · approach and test types · environments and tools · test data · roles and responsibilities · schedule and milestones · entry/exit/suspension criteria · deliverables · risks and mitigations.
 
@@ -252,6 +331,23 @@ Synthetic data generation, masked/anonymised production data (never raw PII), da
 # Advanced
 
 ## Non-Functional Testing: Performance and Security
+
+```js load-test.js (k6)
+import http from 'k6/http';
+import { check } from 'k6';
+export const options = {
+  stages: [{ duration: '2m', target: 200 }, { duration: '5m', target: 200 }, { duration: '1m', target: 0 }],
+  thresholds: { http_req_duration: ['p(95)<300'], http_req_failed: ['rate<0.01'] },
+};
+export default function () {
+  const r = http.get('https://staging.shop.example.com/api/products');
+  check(r, { 'status 200': (res) => res.status === 200 });
+}
+```
+```bash
+k6 run load-test.js
+docker run -t ghcr.io/zaproxy/zaproxy zap-baseline.py -t https://staging.shop.example.com   # passive security scan
+```
 
 ### Performance testing types
 | Type | Question |
@@ -290,6 +386,18 @@ Process: define SLAs and workload model (realistic user journeys, think time, ra
 > [!WARN]
 > Metrics can be gamed (e.g., code coverage at 90% with no meaningful assertions). Use them for insight, not as targets alone. Mutation testing measures whether tests actually catch bugs.
 
+```js
+const metrics = {
+  passRate: passed / executed,                         // 0.96
+  defectLeakage: prodDefects / (prodDefects + preReleaseDefects),   // 0.08
+  defectRemovalEfficiency: preReleaseDefects / (preReleaseDefects + prodDefects),
+  requirementCoverage: reqsWithTests / totalReqs,
+};
+```
+```sql Defects by severity per release
+SELECT release, severity, COUNT(*) FROM defects GROUP BY release, severity ORDER BY release;
+```
+
 ### Mutation testing
 Tools introduce small changes ("mutants") into code (e.g., `>` → `>=`); if tests still pass, the mutant "survived" → tests are weak. Tools: Stryker (JS/.NET), PIT (Java), mutmut (Python).
 
@@ -317,6 +425,14 @@ Unit → component tests (service in isolation with mocks) → **consumer-driven
 
 ## QA Leadership: Strategy, Process and Interviews for Senior Roles
 
+```yaml Quality gates in the pipeline
+quality_gates:
+  pull_request: [lint, unit (coverage ≥ 80% on changed lines), contract tests]
+  merge_to_main: [integration, security scan (no critical), build image]
+  staging: [e2e smoke (critical journeys), performance check p95 < 300ms, a11y scan]
+  production: [canary 10% with error-rate SLO, synthetic monitoring]
+```
+
 ### Building a test strategy for a new product
 1. Understand business goals, users, risks and compliance needs.
 2. Define quality attributes that matter (e.g., availability 99.9%, p95 < 300 ms, WCAG AA).
@@ -343,72 +459,269 @@ ISTQB (Foundation, Advanced Test Analyst / Technical Test Analyst / Test Manager
 ### What is the difference between verification and validation?
 Verification checks that the product is built correctly according to specifications ("building the product right") — through reviews, walkthroughs and inspections, often without executing code. Validation checks that the product meets user needs ("building the right product") — by executing and testing the software.
 
+```text
+Verification (static, "built right")   → review the spec, code review, linting
+  npx eslint src && npx tsc --noEmit
+Validation (dynamic, "right product")  → run it with users/tests against real needs
+  npx playwright test checkout.spec.ts ; UAT session with the business
+```
+
 ### What is the difference between error, defect and failure?
 An error is a human mistake. It can introduce a defect (a fault in code or documents). When the defective code executes, it may cause a failure — the system behaving differently from what is expected.
+
+```python
+# Error: dev assumes the list is never empty
+def average(xs): return sum(xs) / len(xs)   # Defect
+average([])                                  # Failure: ZeroDivisionError at runtime
+```
 
 ### Smoke testing vs sanity testing?
 Smoke testing is a broad, shallow check that a new build's critical functions work and it's stable enough for further testing. Sanity testing is a narrow, deeper check that a specific change or bug fix works correctly, usually without full regression.
 
+```bash
+npx playwright test --grep @smoke          # broad & shallow: app up, login, home, checkout page loads
+npx playwright test tests/coupons.spec.ts  # sanity: narrow & deep on the area that was just fixed
+```
+```js
+test('home page loads @smoke', async ({ page }) => { await page.goto('/'); await expect(page).toHaveTitle(/Shop/); });
+```
+
 ### What is regression testing?
 Re-running tests to ensure recent code changes haven't broken existing functionality. It's done after fixes, enhancements or configuration changes and is the prime candidate for automation.
+
+```js Pin a fixed bug with a regression test
+// BUG-1423: totals were off by one cent for 3 × €0.10
+test('BUG-1423 rounding regression', () => {
+  expect(cartTotal([{ price: 0.1, qty: 3 }])).toBe(0.3);
+});
+```
+```bash
+npm test                          # full regression on every merge
+npx jest --onlyChanged            # fast feedback locally
+```
 
 ### Severity vs priority?
 Severity is the technical impact of a defect on the system; priority is how urgently it should be fixed from a business perspective. A misspelled company name on the homepage is low severity but high priority; a crash in a rarely used feature may be high severity but low priority.
 
+```text
+Bug                                         Severity   Priority
+Logo misspelled on homepage                 Low        High   (brand impact)
+Crash in yearly legacy export (1 user)      High       Low
+Payment fails for all Visa cards            Critical   P0
+```
+
 ### What are the levels of testing?
 Unit testing (individual components), integration testing (interactions between components), system testing (the complete system against requirements) and acceptance testing (validation by users/business, e.g., UAT).
+
+```python pytest example of unit vs integration
+def test_unit_discount():                       # unit: pure function
+    assert discount(200) == 20
+
+def test_integration_order_saved(db_session):   # integration: real DB fixture
+    order = OrderService(db_session).place(customer_id=1, total=200)
+    assert db_session.get(Order, order.id).total == 200
+```
 
 ### What is the STLC?
 The Software Testing Life Cycle: requirement analysis, test planning, test case design, environment setup, test execution and test closure — each with entry and exit criteria.
 
+```text
+Requirement analysis → Test planning → Test case design → Env setup → Execution → Closure
+   (RTM drafted)       (test plan)     (cases + data)    (staging +   (runs,      (report,
+                                                          seed data)   defects)     lessons)
+```
+
 ### Black-box vs white-box testing?
 Black-box testing validates functionality from the outside using requirements, without code knowledge. White-box testing designs tests based on internal structure and logic, measuring coverage of statements, branches and paths.
+
+```js
+// Black-box: from the spec — "orders ≥ 100 get 10%"
+test.each([[99, 0], [100, 10]])('discount(%i)', (t, d) => expect(discount(t)).toBe(d));
+
+// White-box: from the code — cover both branches of the if
+function shipping(total, member) { if (member || total >= 50) return 0; return 4.99; }
+test('member branch', () => expect(shipping(10, true)).toBe(0));
+test('threshold branch', () => expect(shipping(60, false)).toBe(0));
+test('paid branch', () => expect(shipping(10, false)).toBe(4.99));
+```
 
 ## Intermediate
 
 ### Explain equivalence partitioning and boundary value analysis with an example.
 For a field accepting ages 18–60, equivalence partitioning divides inputs into classes — below 18, 18–60, above 60, non-numeric — and tests one value from each. Boundary value analysis tests the edges where defects are common: 17, 18, 19, 59, 60, 61.
 
+```python
+import pytest
+@pytest.mark.parametrize("age,ok", [
+    (17, False), (18, True), (60, True), (61, False),   # boundaries
+    (35, True), (-5, False), ("x", False),              # one value per partition
+])
+def test_age(age, ok):
+    assert is_valid_age(age) is ok
+```
+
 ### Describe the defect life cycle.
 New → Assigned → Open → Fixed → Ready for retest → Verified → Closed. Defects can also be Rejected, marked Duplicate, Deferred, Not reproducible, or Reopened if retesting fails.
+
+```text
+New ─▶ Assigned ─▶ Open ─▶ Fixed ─▶ Ready for retest ─▶ Retest ─▶ Verified ─▶ Closed
+ │                    │                                   │
+ ├─▶ Rejected         ├─▶ Deferred                        └─▶ Reopened ─▶ Assigned
+ └─▶ Duplicate        └─▶ Not reproducible
+```
 
 ### What makes a good bug report?
 A clear, specific title; environment details; preconditions; numbered steps to reproduce; expected vs actual results; severity and priority; evidence like screenshots, videos and logs; and frequency of occurrence. It should let a developer reproduce the issue without further questions.
 
+```markdown
+**Title:** [Checkout] 500 error when address line 2 contains an emoji
+**Build/Env:** 2026.10.22-3 · staging · Firefox 131 · macOS 15
+**Preconditions:** logged in as qa+7@test.com, 1 item in cart
+**Steps:** 1. Checkout 2. Address line 2 = "Flat 3 🏠" 3. Click Pay
+**Expected:** order placed · **Actual:** "Something went wrong" (HTTP 500)
+**Evidence:** HAR, screenshot, request-id 9b21…, server log excerpt
+**Severity:** Major · **Priority:** P2 · **Frequency:** 5/5
+```
+
 ### What is a Requirement Traceability Matrix?
 A document mapping requirements to test cases (and defects). It ensures every requirement is covered, helps assess the impact of requirement changes, and provides coverage evidence for audits and sign-off.
+
+```text
+Req ID   Requirement                    Test cases               Defects     Status
+REQ-12   Login with email + password    TC-101, TC-102, TC-103   BUG-55      Pass
+REQ-13   Lock account after 5 failures  TC-110                   —           Pass
+REQ-14   Password reset by email        TC-120, TC-121           BUG-61(open) Fail
+```
 
 ### What is the test pyramid?
 A model recommending many fast, cheap unit tests at the base, fewer integration/API tests in the middle and a small number of slow, brittle UI/E2E tests on top — giving fast feedback and maintainable automation.
 
+```text
+          ▲  E2E (≈10)        Playwright: critical journeys only
+         ▲▲▲ API/contract (≈100)  SuperTest, Pact
+       ▲▲▲▲▲▲ Unit (≈1000)      Jest / pytest / JUnit: fast, isolated
+```
+```json package.json
+{ "scripts": { "test:unit": "jest", "test:api": "jest -c jest.api.config.js", "test:e2e": "playwright test" } }
+```
+
 ### How do you test when requirements are unclear or missing?
 Ask stakeholders clarifying questions, review similar features and competitor products, use exploratory testing, write down assumptions and get them confirmed, base tests on user workflows, and collaborate with developers and the product owner via Three Amigos sessions.
+
+```markdown Assumptions log, shared with the PO for sign-off
+| # | Assumption                                   | Confirmed by | Date       |
+|---|----------------------------------------------|--------------|------------|
+| 1 | Coupons can't be combined                    | PO (Ravi)    | 2026-10-20 |
+| 2 | Max 99 units per line item                   | pending      |            |
+```
 
 ### What is exploratory testing and when is it useful?
 Simultaneous learning, test design and execution, guided by a charter and time box rather than scripts. It's valuable for new features, unclear requirements, finding unexpected defects and complementing automated regression.
 
+```markdown Session charter
+**Charter:** Explore coupon application with unusual carts to discover pricing errors
+**Time box:** 60 min · **Tester:** Asha · **Build:** 2026.10.22-3
+**Ideas:** 0-price items, max qty, currency switch mid-checkout, back button after applying
+**Notes / Bugs found:** BUG-1501 coupon re-applied after back navigation
+```
+
 ### What is risk-based testing?
 Prioritising test effort based on risk = probability of failure × business impact. High-risk areas (payments, security, complex or frequently changed code) get deeper and earlier testing, while low-risk areas get lighter coverage.
+
+```js Pick the suite by risk tag
+// playwright.config: grep by tags
+test('pay with saved card @risk-high @payments', async ({ page }) => { /* … */ });
+test('change avatar @risk-low', async ({ page }) => { /* … */ });
+```
+```bash
+npx playwright test --grep "@risk-high"     # when time is short
+```
 
 ## Advanced
 
 ### How would you design a test strategy for a new e-commerce platform?
 Identify critical business flows (search, cart, checkout, payments) and risks; define quality goals (performance SLAs, availability, accessibility, security compliance like PCI DSS); apply the test pyramid with unit, API/contract and focused E2E tests in CI; plan performance tests for peak sales, security testing, cross-browser/device coverage, test data management with masked data, monitoring and canary releases in production, and metrics like defect leakage to improve continuously.
 
+```yaml test-strategy.yml (summary)
+critical_flows: [search, product page, cart, checkout, payment, order email]
+quality_goals: { p95_latency_ms: 300, availability: 99.9, wcag: AA }
+layers:
+  unit: business rules (pricing, tax, stock)  — Jest, ≥80% on domain
+  api: every endpoint + negative cases        — SuperTest + Pact with payment provider
+  e2e: 12 critical journeys × 3 browsers      — Playwright
+  non_functional: [k6 load before sales, OWASP ZAP, axe a11y]
+environments: [ephemeral per PR, staging with anonymised data]
+exit_criteria: { critical_open_bugs: 0, high_open_bugs: "<= 2 with workaround" }
+```
+
 ### How do you measure the effectiveness of testing?
 Defect leakage and defect removal efficiency (production vs pre-release defects), requirement and risk coverage, escaped defect severity, mean time to detect, mutation score of automated tests, flaky test rate, and trends over releases. Combine metrics with qualitative analysis of escaped defects.
+
+```sql
+-- Defect leakage per release
+SELECT release,
+       SUM(CASE WHEN found_in = 'production' THEN 1 ELSE 0 END)::float / COUNT(*) AS leakage
+FROM defects GROUP BY release;
+```
+```bash
+npx stryker run          # mutation score: do tests actually catch injected bugs?
+```
 
 ### Load vs stress vs soak testing?
 Load testing verifies performance under expected peak load against SLAs. Stress testing pushes beyond capacity to find breaking points and observe failure and recovery behaviour. Soak (endurance) testing runs a sustained load for hours or days to reveal memory leaks, resource exhaustion and degradation.
 
+```js k6 scenarios
+export const options = {
+  scenarios: {
+    load:   { executor: 'constant-vus', vus: 200, duration: '10m' },                       // expected peak
+    stress: { executor: 'ramping-vus', stages: [{ duration: '10m', target: 2000 }], startTime: '10m' }, // find the breaking point
+    soak:   { executor: 'constant-vus', vus: 150, duration: '8h', startTime: '20m' },      // leaks over time
+  },
+};
+```
+
 ### What is contract testing and why is it useful for microservices?
 Consumer-driven contract testing (e.g., Pact) captures the expectations each consumer has of a provider's API as a contract. Providers verify against those contracts in CI. It catches breaking API changes early without slow, fragile end-to-end environments.
+
+```js Consumer test (Pact)
+const provider = new PactV3({ consumer: 'web', provider: 'orders-api' });
+provider
+  .given('order 42 exists')
+  .uponReceiving('get order 42')
+  .withRequest({ method: 'GET', path: '/orders/42' })
+  .willRespondWith({ status: 200, body: { id: 42, total: MatchersV3.decimal(19.99) } });
+await provider.executeTest(async (mock) => {
+  const order = await new OrdersClient(mock.url).get(42);
+  expect(order.id).toBe(42);
+});
+// The provider's CI replays this contract against the real service
+```
 
 ### How do you handle flaky tests?
 Track and quarantine them so they don't block pipelines, then fix root causes: replace sleeps with explicit waits, isolate test data, remove order dependencies, stabilise environments, mock unreliable external services, and fix real race conditions in the product. Monitor flakiness rates over time.
 
+```js
+// ❌ flaky
+await page.click('#save'); await page.waitForTimeout(2000); expect(await page.textContent('.toast')).toBe('Saved');
+// ✅ wait on the condition
+await page.getByRole('button', { name: 'Save' }).click();
+await expect(page.getByRole('status')).toHaveText('Saved');
+test.fixme('known flaky: tracked in QA-311', async () => { /* quarantined */ });
+```
+
 ### Shift-left vs shift-right testing?
 Shift-left moves testing earlier — requirement reviews, TDD, static analysis, unit and API tests in CI — to find defects when they're cheapest to fix. Shift-right tests in production safely — monitoring, canary releases, feature flags, A/B tests and chaos engineering — to learn from real usage and improve resilience. Mature teams do both.
+
+```yaml
+# Shift-left: pre-commit + PR checks
+- run: npx eslint . && npx tsc --noEmit && npm test
+# Shift-right: production checks
+- name: synthetic check every 5 min
+  run: npx playwright test --grep @synthetic --config=prod.config.ts
+```
+```js Feature flag + canary metrics
+if (flags.enabled('new-search', user)) return newSearch(q);   // watch error rate for 5% of users
+```
 
 # Scenario Questions
 
@@ -417,13 +730,33 @@ Shift-left moves testing earlier — requirement reviews, TDD, static analysis, 
 ### The release is tomorrow and you only have time to test 20% of the features. How do you choose?
 Use **risk-based testing**. Prioritise by business impact (payments, login, checkout), by likelihood of failure (recently changed code, complex areas, past bug hotspots) and by usage analytics. Run the smoke and critical-path tests first, then the regression tests around the changes. Tell stakeholders exactly what wasn't covered, so the residual risk is known.
 
+```bash
+git diff --stat v2.3.0..release/2.4.0 | sort -k3 -rn | head    # what changed most
+npx playwright test --grep "@risk-high|@smoke"                  # critical + changed areas first
+```
+
 ### A developer says "works on my machine" about a bug you found. How do you handle it?
 Make the bug **reproducible and objective**: exact steps, test data, environment (browser, OS, build number, feature flags), expected versus actual result, screenshots or video, console and network logs, and a request ID. Compare environments (config, data, versions). Pair with the developer for a few minutes; it's faster than going back and forth on a ticket.
+
+```bash Capture objective evidence
+npx playwright test checkout.spec.ts --trace on      # trace.zip with DOM, network, console
+curl -s https://staging.shop.example.com/version     # exact build
+docker run --rm -e TZ=Asia/Kolkata myapp npm test    # reproduce env differences (timezone, locale)
+```
 
 ## Intermediate
 
 ### Production bugs keep escaping even though test coverage is 85%. What would you change?
 Coverage shows which lines ran, not whether the behaviour was checked. Look at the escaped bugs to find **why** they escaped (missing edge cases, integration gaps, environment differences, bad test data). Then add tests at the right level (contract and integration tests), use mutation testing to check test strength, put exploratory sessions on risky features, and add production monitoring and canaries.
+
+```js High coverage, weak test
+test('applyDiscount', () => { applyDiscount(cart); });                 // runs code, asserts nothing
+// Meaningful
+test('applyDiscount caps at 50%', () => expect(applyDiscount({ total: 100, pct: 80 }).total).toBe(50));
+```
+```bash
+npx stryker run   # mutation testing exposes assertion-free tests
+```
 
 ## Advanced
 
@@ -435,12 +768,29 @@ Coverage shows which lines ran, not whether the behaviour was checked. Look at t
 - Exploratory testing time for new features.
 - Track quality metrics: escaped defects, change failure rate, MTTR.
 
+```yaml
+on: [pull_request]
+jobs:
+  quality:
+    steps:
+      - run: npm run lint && npm run test:unit -- --coverage
+      - run: npm run test:contract
+      - run: npm run test:e2e -- --grep @smoke --shard=${{ matrix.shard }}/4
+# After deploy: canary + synthetic monitoring + automatic rollback on SLO breach
+```
+
 # Tricky Questions
 
 ## Beginner
 
 ### A login field accepts 6–12 characters. Which lengths do you test with boundary value analysis?
 5, 6, 12 and 13 at minimum (just outside and on each boundary), often plus 7 and 11, and one mid-range value from the valid **equivalence partition** (say 9). Also test empty input, whitespace-only input and multi-byte characters.
+
+```js
+test.each([
+  [5, false], [6, true], [7, true], [9, true], [11, true], [12, true], [13, false], [0, false],
+])('username length %i valid=%p', (len, ok) => expect(isValidUsername('a'.repeat(len))).toBe(ok));
+```
 
 ## Intermediate
 
@@ -450,5 +800,16 @@ Coverage shows which lines ran, not whether the behaviour was checked. Look at t
 
 Severity is technical impact; priority is how urgently the business needs it fixed.
 
+```text
+High severity / low priority : NullPointerException in a yearly legacy export used by one admin
+Low severity / high priority : CEO's name misspelled on the launch landing page the day before launch
+```
+
 ### Is 100% test coverage proof that the code is bug-free?
 No. It proves every line ran, not that the assertions are meaningful or that every input combination, integration, concurrency case or requirement was tested. A test with no assertions still adds coverage. Mutation testing measures whether the tests actually catch faults.
+
+```js
+function divide(a, b) { return a / b; }
+test('divide', () => expect(divide(10, 2)).toBe(5));   // 100% line coverage
+divide(1, 0);   // Infinity — untested input, still a bug for a "safe divide" requirement
+```

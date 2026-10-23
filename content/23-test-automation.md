@@ -15,6 +15,21 @@ summary: Unit, API and end-to-end automation with Selenium, Playwright and Cypre
 
 Test automation uses code to execute tests, compare results and report — giving **fast, repeatable feedback**.
 
+```js Good candidate: data-driven regression that runs on every build
+const cases = [
+  { country: 'DE', total: 100, tax: 19 },
+  { country: 'FR', total: 100, tax: 20 },
+  { country: 'IN', total: 100, tax: 18 },
+];
+for (const c of cases) {
+  test(`tax for ${c.country}`, async ({ request }) => {
+    const r = await request.post('/api/tax', { data: c });
+    expect((await r.json()).tax).toBe(c.tax);
+  });
+}
+// Poor candidate: "does the new design look nice?" → exploratory/manual review
+```
+
 ### Good candidates
 - **Regression** suites run on every build.
 - Smoke tests after each deployment.
@@ -152,6 +167,20 @@ Collections with environments, pre-request scripts (generate tokens), tests (`pm
 ## End-to-End Testing Concepts
 
 **End-to-end (E2E) tests** drive the real application through the UI like a user, across all layers (frontend, backend, DB, integrations), verifying complete business flows.
+
+```ts checkout.spec.ts (Playwright)
+import { test, expect } from '@playwright/test';
+test('guest can buy a product', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('searchbox').fill('running shoes');
+  await page.getByRole('link', { name: /Blue Runner/ }).click();
+  await page.getByRole('button', { name: 'Add to cart' }).click();
+  await page.getByRole('link', { name: 'Checkout' }).click();
+  await page.getByLabel('Email').fill('guest@test.com');
+  await page.getByRole('button', { name: 'Pay' }).click();
+  await expect(page.getByRole('heading', { name: 'Order confirmed' })).toBeVisible();
+});
+```
 
 ### Characteristics
 - Highest confidence that the **whole system** works together.
@@ -471,7 +500,7 @@ jobs:
         env: { BASE_URL: http://localhost:3000 }
       - uses: actions/upload-artifact@v4
         if: failure()
-        with: { name: report-${{ matrix.shard }}, path: playwright-report }
+        with: { name: "report-${{ matrix.shard }}", path: playwright-report }
 ```
 
 - Run **smoke** on every PR, **full regression** nightly or before release.
@@ -496,6 +525,20 @@ jobs:
 | Time zones, dates, locales | freeze time (`page.clock`, `cy.clock`), fixed locale |
 
 Policy: detect via re-runs and dashboards, **quarantine** quickly, fix within an SLA, and never "just add retries" without investigating.
+
+```ts
+// ❌ fixed sleep + shared data
+await page.waitForTimeout(3000);
+// ✅ wait for the network response the UI depends on
+const resp = page.waitForResponse((r) => r.url().includes('/api/orders') && r.status() === 201);
+await page.getByRole('button', { name: 'Place order' }).click();
+await resp;
+// ✅ unique data per test
+const email = `user+${Date.now()}-${test.info().workerIndex}@test.com`;
+```
+```ts playwright.config.ts
+export default defineConfig({ retries: process.env.CI ? 1 : 0, use: { trace: 'on-first-retry' } });
+```
 
 ## Advanced Topics: Visual, Accessibility, Mobile and Performance Scripts
 
@@ -542,63 +585,285 @@ Self-healing locators, AI-generated test cases from requirements, LLM agents tha
 ### What test cases should be automated?
 Stable, repetitive, high-value tests: regression and smoke suites, data-driven flows, API tests, critical business journeys and cross-browser checks. Avoid automating rapidly changing features, one-off tests, usability judgements and exploratory testing.
 
+```ts
+// ✅ automate: critical, stable, repeated every release
+test('login → dashboard @smoke', async ({ page }) => { /* … */ });
+// ✅ automate: many data combinations
+test.describe('shipping matrix', () => { /* 40 country × weight cases */ });
+// ❌ don't: one-off migration check, rapidly changing prototype UI, CAPTCHA flows
+```
+
 ### What is the Page Object Model?
 A design pattern where each page or component is represented by a class that encapsulates its locators and exposes user-level actions. Tests call these methods instead of using locators directly, reducing duplication and making maintenance easier when the UI changes.
+
+```ts pages/LoginPage.ts
+export class LoginPage {
+  constructor(private page: Page) {}
+  readonly email = () => this.page.getByLabel('Email');
+  readonly password = () => this.page.getByLabel('Password');
+  async goto() { await this.page.goto('/login'); }
+  async login(email: string, pw: string) {
+    await this.email().fill(email);
+    await this.password().fill(pw);
+    await this.page.getByRole('button', { name: 'Sign in' }).click();
+  }
+}
+```
+```ts login.spec.ts
+test('valid login', async ({ page }) => {
+  const login = new LoginPage(page);
+  await login.goto();
+  await login.login('qa@test.com', process.env.QA_PASSWORD!);
+  await expect(page).toHaveURL(/dashboard/);
+});
+```
 
 ### Implicit vs explicit wait in Selenium?
 An implicit wait sets a global timeout for finding elements. An explicit wait (`WebDriverWait` with `ExpectedConditions`) waits for a specific condition on a specific element, such as visibility or clickability. Explicit waits are preferred; mixing both can cause unpredictable delays.
 
+```java
+driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(5));     // global, applies to every findElement
+
+WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10)); // explicit, per condition
+WebElement pay = wait.until(ExpectedConditions.elementToBeClickable(By.id("pay")));
+pay.click();
+wait.until(ExpectedConditions.textToBePresentInElementLocated(By.cssSelector(".toast"), "Paid"));
+// Don't mix implicit and explicit waits — timeouts compound unpredictably
+```
+
 ### What is end-to-end testing?
 Testing complete user journeys through the real application — UI, backend services, database and integrations — to verify the whole system works together as a user would experience it, e.g., search → add to cart → pay → order confirmation.
+
+```ts
+test('order shows up in the admin panel', async ({ page, request }) => {
+  const { id } = await (await request.post('/api/orders', { data: { sku: 'A1', qty: 1 } })).json(); // API setup
+  await page.goto('/admin/orders');
+  await expect(page.getByRole('row', { name: new RegExp(`#${id}`) })).toBeVisible();          // UI + backend + DB
+});
+```
 
 ### Which locators are most reliable?
 User-facing locators (role with accessible name, label, text) and dedicated `data-testid` attributes are most robust. IDs are good if stable. Avoid absolute XPath and auto-generated CSS classes that change with builds.
 
+```ts
+page.getByRole('button', { name: 'Add to cart' });   // ✅ best: what users & screen readers see
+page.getByLabel('Email address');                    // ✅
+page.getByTestId('cart-count');                      // ✅ stable contract: data-testid="cart-count"
+page.locator('#checkout');                           // ok if the id is stable
+page.locator('/html/body/div[3]/div/ul/li[2]/a');    // ❌ absolute XPath breaks with any layout change
+page.locator('.btn.btn-primary.mt-2');               // ❌ styling classes change
+```
+
 ### What is the difference between a stub and a mock?
 A stub provides predefined responses to calls so the test can proceed. A mock also has expectations about how it should be called and verifies those interactions (e.g., that `charge()` was called once with 100).
+
+```js
+// Stub: canned answer so the test can run
+const rates = { get: () => ({ EUR: 1, USD: 1.08 }) };
+expect(convert(100, 'USD', rates)).toBe(108);
+
+// Mock: verifies the interaction
+const mailer = { send: jest.fn() };
+await registerUser({ email: 'a@b.com' }, mailer);
+expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'a@b.com', template: 'welcome' }));
+```
 
 ## Intermediate
 
 ### Playwright vs Cypress vs Selenium — how would you choose?
 Playwright for modern web apps needing speed, reliability, multi-browser (including WebKit), multi-tab and multiple languages. Cypress for JS teams wanting an excellent interactive developer experience and component testing. Selenium for broad language and browser coverage, existing enterprise frameworks, Selenium Grid infrastructure, or mobile via Appium.
 
+```ts Playwright
+await page.getByRole('button', { name: 'Save' }).click();
+await expect(page.getByText('Saved')).toBeVisible();
+```
+```js Cypress
+cy.contains('button', 'Save').click();
+cy.contains('Saved').should('be.visible');
+```
+```java Selenium
+driver.findElement(By.xpath("//button[text()='Save']")).click();
+new WebDriverWait(driver, Duration.ofSeconds(10)).until(ExpectedConditions.visibilityOfElementLocated(By.xpath("//*[text()='Saved']")));
+```
+
 ### How do you handle authentication in E2E tests efficiently?
 Log in once via API or a setup step, save the session (Playwright `storageState`, Cypress `cy.session`) and reuse it across tests. Use dedicated test accounts per role, and test the login UI itself in only a few dedicated tests.
+
+```ts auth.setup.ts
+import { test as setup } from '@playwright/test';
+setup('authenticate', async ({ request }) => {
+  await request.post('/api/login', { data: { email: 'qa@test.com', password: process.env.QA_PASSWORD } });
+  await request.storageState({ path: '.auth/user.json' });
+});
+```
+```ts playwright.config.ts
+projects: [
+  { name: 'setup', testMatch: /auth\.setup\.ts/ },
+  { name: 'chromium', use: { storageState: '.auth/user.json' }, dependencies: ['setup'] },
+],
+```
 
 ### How do you manage test data for automation?
 Create data through APIs or database seeding before each test, use unique identifiers per run, clean up afterwards or use disposable environments, use factories/builders for readable data creation, and never depend on data created by another test.
 
+```ts fixtures.ts
+export const test = base.extend<{ product: Product }>({
+  product: async ({ request }, use) => {
+    const res = await request.post('/api/test/products', { data: { name: `Prod-${crypto.randomUUID()}`, price: 10 } });
+    const product = await res.json();
+    await use(product);                                    // test runs here
+    await request.delete(`/api/test/products/${product.id}`); // cleanup
+  },
+});
+test('can buy a fresh product', async ({ page, product }) => { await page.goto(`/p/${product.id}`); });
+```
+
 ### What is StaleElementReferenceException and how do you fix it?
 It occurs when a previously found element is no longer attached to the DOM, usually because the page re-rendered. Re-locate the element after the change, wait for the update to finish, or use frameworks with lazy locators (Playwright Locators) that re-query automatically.
+
+```java
+WebElement row = driver.findElement(By.cssSelector("tr.order"));
+driver.findElement(By.id("refresh")).click();        // table re-renders
+// row.click();                                      // ❌ StaleElementReferenceException
+wait.until(ExpectedConditions.stalenessOf(row));
+driver.findElement(By.cssSelector("tr.order")).click();   // ✅ re-locate after the change
+```
 
 ### How do you run tests in parallel?
 Make tests independent with isolated data, then use the runner's parallelism (Playwright workers/sharding, TestNG parallel suites, pytest-xdist), Selenium Grid or cloud grids, and CI matrix sharding. Avoid shared state like static WebDriver instances (use ThreadLocal in Java).
 
+```ts playwright.config.ts
+export default defineConfig({ fullyParallel: true, workers: process.env.CI ? 4 : undefined });
+```
+```bash
+npx playwright test --shard=2/4         # split across CI machines
+pytest -n auto                          # pytest-xdist
+mvn test -Dparallel=methods -DthreadCount=4   # TestNG/Surefire
+```
+
 ### What is data-driven testing?
 Running the same test logic with multiple input sets supplied from external sources (CSV, Excel, JSON, database) or parameterisation (`@DataProvider`, `pytest.mark.parametrize`, Scenario Outline examples), increasing coverage without duplicating code.
 
+```ts
+import data from './data/logins.json' assert { type: 'json' };
+for (const { email, password, error } of data) {
+  test(`login fails for ${email}`, async ({ page }) => {
+    await new LoginPage(page).login(email, password);
+    await expect(page.getByRole('alert')).toHaveText(error);
+  });
+}
+```
+```java TestNG
+@DataProvider public Object[][] users() { return new Object[][] { {"a@x.com", "bad", "Invalid"}, {"", "x", "Email required"} }; }
+@Test(dataProvider = "users") public void loginFails(String e, String p, String msg) { /* … */ }
+```
+
 ### How do you test APIs automatically?
 Send requests with a client (REST Assured, requests, SuperTest, Postman/Newman), assert status codes, body fields, schemas, headers and response times, cover negative and authorization cases, chain calls for workflows, and run them in CI against test environments.
+
+```ts api/orders.spec.ts (Playwright request)
+test('create order', async ({ request }) => {
+  const res = await request.post('/api/orders', { data: { sku: 'A1', qty: 2 } });
+  expect(res.status()).toBe(201);
+  const body = await res.json();
+  expect(body).toMatchObject({ sku: 'A1', qty: 2, status: 'pending' });
+});
+test('rejects qty 0', async ({ request }) => {
+  const res = await request.post('/api/orders', { data: { sku: 'A1', qty: 0 } });
+  expect(res.status()).toBe(422);
+});
+```
+```java REST Assured
+given().contentType(JSON).body(Map.of("sku", "A1", "qty", 2))
+.when().post("/api/orders")
+.then().statusCode(201).body("status", equalTo("pending")).time(lessThan(500L));
+```
 
 ## Advanced
 
 ### How would you design a test automation framework from scratch?
 Choose tools matching the team's language and app (e.g., Playwright + TypeScript), structure it with page/component objects, API clients for setup, fixtures for data and auth, environment configs, tagging for suites, rich reporting (traces, screenshots, Allure), CI integration with parallel sharding and quality gates, coding standards and code review — and keep it aligned with the test pyramid.
 
+```text
+tests/
+  e2e/            checkout.spec.ts, search.spec.ts
+  api/            orders.spec.ts
+pages/            LoginPage.ts, CartPage.ts        (UI actions)
+api-clients/      OrdersClient.ts                  (setup/teardown via API)
+fixtures/         index.ts                          (auth, data builders)
+config/           playwright.config.ts, env/{dev,staging}.json
+reports/          HTML + JUnit for CI, traces on failure
+```
+
 ### How do you deal with flaky tests in CI?
 Detect them via reruns and flakiness dashboards, quarantine to keep pipelines trustworthy, then fix root causes: remove sleeps, wait on conditions, isolate data, stub third-party dependencies, freeze time, stabilise environments, or fix real race conditions in the app. Track flakiness as a metric with an SLA for fixes.
+
+```bash
+npx playwright test --repeat-each=20 tests/cart.spec.ts     # reproduce flakiness locally
+npx playwright show-trace test-results/**/trace.zip         # inspect the failed retry
+```
+```ts
+test.describe.configure({ retries: 2 });                     // temporary, while fixing
+test('flaky upload', { tag: '@quarantine' }, async () => {});  // CI runs: --grep-invert @quarantine
+```
 
 ### How do you keep E2E suites fast?
 Keep only critical journeys at the E2E layer, push other checks down to API/unit tests, set up state via APIs, reuse authenticated sessions, mock non-essential third parties, run in parallel with sharding, run smoke on PRs and full regression nightly, and remove redundant tests.
 
+```ts
+// Set up state via API, not the UI
+test.beforeEach(async ({ request }) => { await request.post('/api/test/cart', { data: { items: ['A1', 'B2'] } }); });
+// Mock slow, non-essential third parties
+await page.route('**/analytics/**', (route) => route.fulfill({ status: 204 }));
+await page.route('**/api/recommendations', (route) => route.fulfill({ json: [] }));
+```
+
 ### How do you integrate automation into a CI/CD pipeline?
 Run unit and API tests on every commit, deploy to an ephemeral or test environment, run smoke/E2E tests in parallel, publish JUnit/HTML reports and failure artifacts, enforce quality gates on merges and promotions, schedule full regression and performance runs, and notify the team on failures.
+
+```yaml
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy: { matrix: { shard: [1, 2, 3, 4] } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci && npx playwright install --with-deps
+      - run: npx playwright test --shard=${{ matrix.shard }}/4 --reporter=blob
+        env: { BASE_URL: https://staging.shop.example.com }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "blob-${{ matrix.shard }}", path: blob-report }
+```
 
 ### What is the role of contract testing versus E2E testing?
 Contract tests verify that each service meets the API expectations of its consumers in isolation and quickly, catching integration breaks early. E2E tests verify complete user flows across the deployed system. Contract tests reduce how many slow E2E tests you need, but a few E2E tests still validate the critical journeys.
 
+```text
+Contract (fast, per service, in each repo's CI):
+  web ──expects──▶ GET /orders/42 → { id, total }  ✔ verified against orders-api build
+E2E (slow, few, against a deployed environment):
+  browser → web → orders-api → payments → DB      ✔ the whole journey works
+```
+
 ### How would you automate a flow involving an OTP or email verification?
 In test environments use a test mode or fixed OTP, retrieve the OTP from a test inbox API (Mailosaur, MailHog) or a test-only backend endpoint, or seed verified users via API. Never try to bypass production security; CAPTCHAs should be disabled or use test keys in non-production environments.
+
+```ts
+test('sign-up with email verification', async ({ page, request }) => {
+  const inbox = `qa+${Date.now()}@mailpit.test`;
+  await page.goto('/signup');
+  await page.getByLabel('Email').fill(inbox);
+  await page.getByRole('button', { name: 'Send code' }).click();
+  // Mailpit / MailHog API in the test environment
+  const msgs = await (await request.get(`http://mailpit:8025/api/v1/search?query=to:${inbox}`)).json();
+  const code = msgs.messages[0].Snippet.match(/\b\d{6}\b/)[0];
+  await page.getByLabel('Verification code').fill(code);
+  await expect(page.getByText('Welcome')).toBeVisible();
+});
+```
 
 # Scenario Questions
 
@@ -606,6 +871,18 @@ In test environments use a test mode or fixed OTP, retrieve the OTP from a test 
 
 ### A Selenium test fails randomly with "element not found" and passes on rerun. How do you make it stable?
 That's a **timing** problem. Replace `Thread.sleep` with **explicit waits** for a condition (`ExpectedConditions.elementToBeClickable`), or move to Playwright, whose auto-waiting locators handle this. Use stable selectors (`data-testid`, roles) instead of brittle XPath, and wait for app signals (network idle, a spinner gone) rather than fixed time.
+
+```java
+// ❌
+Thread.sleep(3000);
+driver.findElement(By.id("submit")).click();
+// ✅
+new WebDriverWait(driver, Duration.ofSeconds(10))
+    .until(ExpectedConditions.elementToBeClickable(By.id("submit")))
+    .click();
+new WebDriverWait(driver, Duration.ofSeconds(10))
+    .until(ExpectedConditions.invisibilityOfElementLocated(By.cssSelector(".spinner")));
+```
 
 ## Intermediate
 
@@ -616,6 +893,13 @@ That's a **timing** problem. Replace `Thread.sleep` with **explicit waits** for 
 - Delete or merge redundant tests.
 - Run a smoke subset on PRs and the full suite nightly or in the merge queue.
 
+```bash
+npx playwright test --list | wc -l                     # how many E2E tests exist?
+npx playwright test --reporter=json | jq '[.suites[].specs[] | {title, ms: .tests[0].results[0].duration}] | sort_by(-.ms) | .[:10]'
+npx playwright test --grep @critical --shard=1/6       # PR: critical subset, sharded
+npx playwright test                                    # nightly: full suite
+```
+
 ### Tests pass locally but fail in CI. What differences do you check?
 - Headless versus headed browser, viewport size, timezone and locale.
 - Different data or environment variables, and missing secrets.
@@ -624,6 +908,20 @@ That's a **timing** problem. Replace `Thread.sleep` with **explicit waits** for 
 - Browser and driver versions.
 
 Collect traces, screenshots and videos in CI (the Playwright trace viewer) to see what actually happened.
+
+```ts playwright.config.ts — make local == CI
+use: {
+  baseURL: process.env.BASE_URL,
+  viewport: { width: 1280, height: 720 },
+  locale: 'en-GB',
+  timezoneId: 'Europe/London',
+  headless: true,
+  trace: 'retain-on-failure',
+},
+```
+```bash
+docker run --rm -v $PWD:/w -w /w mcr.microsoft.com/playwright:v1.48.2-jammy npx playwright test   # CI's image locally
+```
 
 ## Advanced
 
@@ -638,6 +936,17 @@ Collect traces, screenshots and videos in CI (the Playwright trace viewer) to se
 - Contract tests between services.
 - Clear ownership and code review for test code.
 
+```text
+core/        config, logger, reporters, data-builders, api-clients (shared by all layers)
+web/         Playwright pages + specs
+mobile/      Appium/WebdriverIO screens + specs (Android & iOS capabilities)
+api/         contract + functional API specs
+ci/          matrix: { layer: [api, web, mobile], env: [staging] }
+```
+```ts core/builders/user.ts
+export const aUser = (o: Partial<User> = {}): User => ({ email: `u+${crypto.randomUUID()}@test.com`, role: 'customer', ...o });
+```
+
 # Tricky Questions
 
 ## Intermediate
@@ -645,8 +954,29 @@ Collect traces, screenshots and videos in CI (the Playwright trace viewer) to se
 ### Why is this Playwright assertion flaky, and what's the fix? `expect(await page.locator('.count').textContent()).toBe('3')`
 It reads the text **once**, possibly before the UI updates. Use the web-first assertion `await expect(page.locator('.count')).toHaveText('3')`, which retries until the timeout.
 
+```ts
+expect(await page.locator('.count').textContent()).toBe('3');   // ❌ reads once
+await expect(page.locator('.count')).toHaveText('3');           // ✅ retries until timeout
+```
+
 ### Is it OK to add automatic retries to fix flaky tests?
 Retries hide the symptom, and a flaky test might be a real race condition in the product. Use retries only to **collect evidence** (traces on the first retry), track flaky tests and quarantine them with an owner and a deadline, then fix the root cause (waits, test isolation, test data).
 
+```ts
+export default defineConfig({
+  retries: process.env.CI ? 1 : 0,
+  use: { trace: 'on-first-retry' },          // retries collect evidence, they don't hide it
+  reporter: [['html'], ['json', { outputFile: 'results.json' }]],   // track "flaky" status over time
+});
+```
+
 ### Should E2E tests share one logged-in user and one database record?
 No. Shared state makes tests **order-dependent** and breaks parallel runs. Give each test its own data (created through the API, with unique ids), isolated browser contexts, and cleanup or disposable environments. Reuse only immutable setup such as an auth `storageState` per worker.
+
+```ts
+test('rename project', async ({ page, request }) => {
+  const project = await (await request.post('/api/projects', { data: { name: `p-${crypto.randomUUID()}` } })).json();
+  await page.goto(`/projects/${project.id}`);
+  // each test owns its data → safe in parallel, any order
+});
+```

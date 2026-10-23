@@ -372,6 +372,19 @@ const items = useCart(s => s.items);   // subscribes only to this slice
 
 ## Rendering, Reconciliation and Fiber
 
+```jsx
+function App({ isAdmin }) {
+  // Different element type at the same position → whole subtree is destroyed & rebuilt
+  return isAdmin ? <AdminPanel /> : <UserPanel />;
+}
+function Tabs({ tab }) {
+  // Same type, different key → React treats it as a new instance (state reset)
+  return <Editor key={tab.id} initialText={tab.text} />;
+}
+// Render phase: calling components (pure, interruptible)
+// Commit phase: DOM mutations → useLayoutEffect → paint → useEffect
+```
+
 ### Render vs commit
 1. **Render phase** — React calls components to compute the new element tree and diffs it against the previous (**reconciliation**). Pure, can be paused or discarded.
 2. **Commit phase** — applies DOM mutations, then runs layout effects and (later) passive effects. Synchronous.
@@ -517,96 +530,479 @@ Split a large app by domain into independently deployed apps (Module Federation,
 ### What is React and what problem does it solve?
 A JavaScript library for building UIs from components. It lets you describe the UI declaratively as a function of state; when state changes, React efficiently updates the DOM. This removes manual DOM manipulation bugs and makes complex interactive UIs composable and predictable.
 
+```jsx
+function Counter() {
+  const [count, setCount] = useState(0);
+  // Describe WHAT the UI looks like for this state — React figures out the DOM updates
+  return <button onClick={() => setCount(count + 1)}>Clicked {count} times</button>;
+}
+createRoot(document.getElementById('root')).render(<Counter />);
+```
+
 ### What is JSX?
 A syntax extension that looks like HTML inside JavaScript. It compiles to function calls (`jsx()`/`React.createElement`) that create plain objects describing the UI. It supports embedding expressions with `{}` and escapes values by default.
+
+```jsx
+const el = <h1 className="title">Hello {user.name}</h1>;
+// compiles to (React 17+ automatic runtime):
+import { jsx as _jsx } from 'react/jsx-runtime';
+const el2 = _jsx('h1', { className: 'title', children: ['Hello ', user.name] });
+// → plain object: { type: 'h1', props: { className: 'title', children: [...] } }
+```
 
 ### What is the difference between props and state?
 Props are inputs passed from parent to child and are read-only for the child. State is private data managed within a component that can change over time via its setter; changing it triggers a re-render. Data flows down through props, changes flow up through callbacks.
 
+```jsx
+function Greeting({ name }) {               // props: read-only input
+  const [waves, setWaves] = useState(0);    // state: owned & changeable
+  return <p onClick={() => setWaves((w) => w + 1)}>Hi {name} 👋 × {waves}</p>;
+}
+<Greeting name="Ada" />
+```
+
 ### Why do lists need keys?
 Keys give list items a stable identity so React can match them across renders, reusing the right DOM nodes and component state when items move, insert or delete. Using indexes for dynamic lists causes state to attach to the wrong item.
+
+```jsx
+<ul>
+  {todos.map((t) => (
+    <li key={t.id}>               {/* ✅ stable id */}
+      <input defaultValue={t.text} />
+    </li>
+  ))}
+</ul>
+// ❌ key={index}: deleting item 0 makes item 1 reuse item 0's DOM/input state
+```
 
 ### What are controlled and uncontrolled components?
 Controlled inputs derive their value from React state and update via `onChange`, making React the source of truth. Uncontrolled inputs keep their value in the DOM; you read it via refs or `FormData`. Controlled is easier to validate; uncontrolled is simpler and faster for large forms.
 
+```jsx
+function Controlled() {
+  const [email, setEmail] = useState('');
+  return <input value={email} onChange={(e) => setEmail(e.target.value.trim())} />;
+}
+function Uncontrolled() {
+  const ref = useRef(null);
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); console.log(ref.current.value); }}>
+      <input ref={ref} defaultValue="hello" />
+    </form>
+  );
+}
+```
+
 ### What is the Virtual DOM?
 A lightweight in-memory tree of objects describing the UI. On updates React builds a new tree, diffs it with the previous one, and applies the minimal set of real DOM changes. Its real value is the declarative model plus batching, not raw speed.
+
+```jsx
+// Render 1                         // Render 2
+<ul>                                <ul>
+  <li key="a">A</li>                  <li key="a">A</li>
+  <li key="b">B</li>                  <li key="b" className="done">B</li>
+</ul>                               </ul>
+// Diff → one DOM operation: liB.className = 'done'
+```
 
 ### What are fragments?
 `<></>` or `<React.Fragment key=…>` group multiple children without adding an extra DOM node — useful for returning multiple elements or rendering table rows.
 
+```jsx
+function Row({ item }) {
+  return (
+    <>
+      <td>{item.name}</td>
+      <td>{item.price}</td>
+    </>
+  );
+}
+{groups.map((g) => (
+  <Fragment key={g.id}><dt>{g.term}</dt><dd>{g.desc}</dd></Fragment> // keyed fragment
+))}
+```
+
 ### Function vs class components?
 Class components use `this.state`, lifecycle methods and `render()`. Function components use hooks and are now the standard: less boilerplate, easier logic reuse via custom hooks, and support for all modern features. Classes are still needed only for error boundaries (without a library).
 
+```jsx
+class Clock extends React.Component {
+  state = { now: new Date() };
+  componentDidMount() { this.id = setInterval(() => this.setState({ now: new Date() }), 1000); }
+  componentWillUnmount() { clearInterval(this.id); }
+  render() { return <p>{this.state.now.toLocaleTimeString()}</p>; }
+}
+function ClockFn() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const id = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(id); }, []);
+  return <p>{now.toLocaleTimeString()}</p>;
+}
+```
+
 ### What does lifting state up mean?
 Moving shared state to the closest common ancestor so sibling components can read it via props and update it via callbacks, keeping a single source of truth.
+
+```jsx
+function Converter() {
+  const [celsius, setCelsius] = useState(0);         // lifted to the common parent
+  return (
+    <>
+      <TempInput label="°C" value={celsius} onChange={setCelsius} />
+      <TempInput label="°F" value={celsius * 9 / 5 + 32} onChange={(f) => setCelsius((f - 32) * 5 / 9)} />
+    </>
+  );
+}
+const TempInput = ({ label, value, onChange }) => (
+  <label>{label}<input type="number" value={value} onChange={(e) => onChange(+e.target.value)} /></label>
+);
+```
 
 ## Intermediate
 
 ### Explain `useEffect` and its dependency array.
 `useEffect` runs side effects after render. With no array it runs after every render; with `[]` once after mount; with `[a, b]` when those values change. The returned cleanup runs before the next effect run and on unmount. Missing dependencies cause stale closures; unstable object/function dependencies cause excessive runs.
 
+```jsx
+useEffect(() => { document.title = `${count} clicks`; });           // every render
+useEffect(() => { analytics.pageView(); }, []);                     // mount only
+useEffect(() => {
+  const ws = new WebSocket(`wss://chat/${roomId}`);
+  ws.onmessage = (e) => setMessages((m) => [...m, e.data]);
+  return () => ws.close();                                          // cleanup before re-run/unmount
+}, [roomId]);                                                       // when roomId changes
+```
+
 ### Why is my state not updating immediately after `setState`?
 State updates are scheduled, not applied synchronously. The current render's variable is a snapshot; the new value appears in the next render. Use the functional updater (`setX(x => x + 1)`) for sequential updates, and `useEffect` or the next render to react to the new value.
+
+```jsx
+function Cart() {
+  const [qty, setQty] = useState(1);
+  function add() {
+    setQty(qty + 1);
+    console.log(qty);                // still 1 — snapshot of this render
+    setQty((q) => q + 1);            // functional updater uses the latest queued value
+  }
+  useEffect(() => { console.log('new qty', qty); }, [qty]); // react to the committed value
+}
+```
 
 ### What are the rules of hooks and why do they exist?
 Call hooks only at the top level of React functions — never in conditions, loops or nested functions — and only from components or custom hooks. React identifies each hook's state by call order; conditional calls would shift the order and mismatch state.
 
+```jsx
+function Profile({ userId }) {
+  // ❌ if (userId) { const [u, setU] = useState(); }   hook order would change between renders
+  const [user, setUser] = useState(null);   // ✅ always called, same order
+  useEffect(() => { if (userId) fetchUser(userId).then(setUser); }, [userId]); // condition inside
+  return user ? <h1>{user.name}</h1> : null;
+}
+// eslint-plugin-react-hooks: "react-hooks/rules-of-hooks": "error"
+```
+
 ### `useMemo` vs `useCallback` vs `React.memo`?
 `useMemo` caches a computed value; `useCallback` caches a function reference (`useCallback(fn, deps)` ≡ `useMemo(() => fn, deps)`); `React.memo` wraps a component to skip re-render when props are shallow-equal. The hooks are mainly useful to keep references stable for memoized children or effect dependencies, or to skip genuinely expensive computations.
+
+```jsx
+const Row = React.memo(function Row({ item, onSelect }) {   // skips render if props are shallow-equal
+  return <li onClick={() => onSelect(item.id)}>{item.name}</li>;
+});
+function List({ items, query }) {
+  const visible = useMemo(() => items.filter((i) => i.name.includes(query)), [items, query]); // cached value
+  const onSelect = useCallback((id) => console.log(id), []);                                // stable function
+  return <ul>{visible.map((i) => <Row key={i.id} item={i} onSelect={onSelect} />)}</ul>;
+}
+```
 
 ### When would you use `useReducer` over `useState`?
 When state has multiple sub-values that change together, when next state depends on complex logic, or when you want to centralise transitions in a testable pure function. It also lets you pass `dispatch` down (stable identity) instead of many callbacks.
 
+```jsx
+function reducer(state, action) {
+  switch (action.type) {
+    case 'fetch':   return { ...state, loading: true, error: null };
+    case 'success': return { loading: false, data: action.data, error: null };
+    case 'failure': return { ...state, loading: false, error: action.error };
+    default: throw new Error(`Unknown action ${action.type}`);
+  }
+}
+const [state, dispatch] = useReducer(reducer, { loading: false, data: null, error: null });
+dispatch({ type: 'fetch' });
+```
+
 ### What is prop drilling and how do you avoid it?
 Passing props through many intermediate components that don't use them. Solutions: composition (pass components as `children`), Context, or a state library (Zustand/Redux). Don't reach for Context for everything — it can cause wide re-renders.
+
+```jsx
+// Composition: pass the rendered element instead of the data
+<Layout header={<UserMenu user={user} />}>
+  <Dashboard />
+</Layout>
+
+// Context for truly global data
+const ThemeContext = createContext('light');
+<ThemeContext.Provider value={theme}><App /></ThemeContext.Provider>
+function Button() { const theme = useContext(ThemeContext); return <button className={theme} />; }
+```
 
 ### How does Context affect performance?
 All consumers re-render whenever the provider's `value` changes by reference. Mitigate by memoizing the value, splitting contexts by update frequency (state vs dispatch), using selectors via external stores (`useSyncExternalStore`, Zustand), or keeping context for rarely-changing data.
 
+```jsx
+const StateCtx = createContext(null);
+const DispatchCtx = createContext(null);
+function CartProvider({ children }) {
+  const [cart, dispatch] = useReducer(cartReducer, []);
+  return (
+    <DispatchCtx.Provider value={dispatch}>   {/* never changes → no re-renders */}
+      <StateCtx.Provider value={cart}>{children}</StateCtx.Provider>
+    </DispatchCtx.Provider>
+  );
+}
+// ❌ value={{ cart, dispatch }} creates a new object every render → all consumers re-render
+```
+
 ### How do you fetch data in React correctly?
 Prefer a framework loader/Server Component or a library like TanStack Query (caching, dedupe, retries, race handling). If using `useEffect`, handle loading/error states, cancel with `AbortController` or an ignore flag in cleanup, and include all dependencies.
+
+```jsx
+import { useQuery } from '@tanstack/react-query';
+function Todos() {
+  const { data, isPending, error } = useQuery({
+    queryKey: ['todos'],
+    queryFn: () => fetch('/api/todos').then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+    staleTime: 30_000,
+  });
+  if (isPending) return <Spinner />;
+  if (error) return <p>Failed: {error.message}</p>;
+  return <ul>{data.map((t) => <li key={t.id}>{t.title}</li>)}</ul>;
+}
+```
 
 ### What is `useRef` used for?
 Accessing DOM nodes (focus, measure, scroll) and storing mutable values that persist across renders without triggering re-renders — timer ids, previous values, instance counters.
 
+```jsx
+function Search() {
+  const inputRef = useRef(null);                 // DOM access
+  const renders = useRef(0);                     // mutable value, no re-render
+  renders.current++;
+  useEffect(() => inputRef.current.focus(), []);
+  return <input ref={inputRef} placeholder={`rendered ${renders.current}×`} />;
+}
+function usePrevious(value) {
+  const ref = useRef();
+  useEffect(() => { ref.current = value; });
+  return ref.current;
+}
+```
+
 ### What is an error boundary?
 A component that catches errors thrown during rendering, lifecycle or constructors of its children and renders a fallback UI. Implemented with `static getDerivedStateFromError` and `componentDidCatch` (or `react-error-boundary`). It doesn't catch event handler, async or SSR errors.
 
+```jsx
+class ErrorBoundary extends React.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { logToSentry(error, info.componentStack); }
+  render() {
+    return this.state.error ? <p>Something went wrong.</p> : this.props.children;
+  }
+}
+<ErrorBoundary><Dashboard /></ErrorBoundary>
+// Doesn't catch: event handlers, async code, SSR — use try/catch there
+```
+
 ### What are portals?
 `createPortal(children, domNode)` renders children into a different DOM node (e.g., `document.body`) while keeping them in the React tree — events bubble through React ancestors and context still works. Used for modals, tooltips and toasts.
+
+```jsx
+import { createPortal } from 'react-dom';
+function Modal({ children, onClose }) {
+  return createPortal(
+    <div className="backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>{children}</div>
+    </div>,
+    document.body                     // escapes overflow:hidden / z-index of parents
+  );
+}
+```
 
 ## Advanced
 
 ### Explain reconciliation and the Fiber architecture.
 Reconciliation diffs the new element tree against the previous one using heuristics: different types rebuild the subtree, same types update props, keys match children. Fiber re-implemented this as an incremental, interruptible work loop of fiber nodes with priority lanes, so React can pause rendering to handle urgent input and enables concurrent features like transitions and Suspense.
 
+```jsx
+// Fiber lets React split rendering into units of work and yield to the browser
+function App() {
+  const [text, setText] = useState('');
+  const [query, setQuery] = useState('');
+  return (
+    <>
+      <input value={text} onChange={(e) => {
+        setText(e.target.value);                        // urgent lane
+        startTransition(() => setQuery(e.target.value)); // low-priority lane, interruptible
+      }} />
+      <SlowResults query={query} />
+    </>
+  );
+}
+```
+
 ### What are concurrent features like `useTransition` and `useDeferredValue`?
 They mark updates as non-urgent so React can interrupt them to keep the UI responsive. `useTransition` wraps state updates (`startTransition`) and gives `isPending`. `useDeferredValue` gives a lagging copy of a value to drive expensive rendering while the input stays snappy.
+
+```jsx
+function Search({ items }) {
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);           // lags behind while typing
+  const [isPending, startTransition] = useTransition();
+  const [tab, setTab] = useState('all');
+  return (
+    <>
+      <input value={query} onChange={(e) => setQuery(e.target.value)} />
+      <button onClick={() => startTransition(() => setTab('archived'))}>Archived {isPending && '…'}</button>
+      <ResultList query={deferredQuery} tab={tab} />
+    </>
+  );
+}
+```
 
 ### What are React Server Components and how do they differ from SSR?
 SSR renders the full component tree to HTML on the server, then ships all component JS to hydrate it. RSCs are components that only ever run on the server; their output is serialized (RSC payload) and their code is never shipped to the client. They can fetch data directly and reduce bundle size. They're combined with SSR for the initial HTML, and with client components for interactivity.
 
+```jsx app/products/page.jsx (Next.js App Router)
+import db from '@/lib/db';
+import AddToCart from './AddToCart';          // client component
+
+export default async function ProductsPage() { // Server Component: runs only on the server
+  const products = await db.product.findMany(); // direct DB access, zero JS shipped for this
+  return products.map((p) => (
+    <article key={p.id}><h2>{p.name}</h2><AddToCart id={p.id} /></article>
+  ));
+}
+```
+```jsx AddToCart.jsx
+'use client';
+export default function AddToCart({ id }) {
+  const [added, setAdded] = useState(false);
+  return <button onClick={() => setAdded(true)}>{added ? 'Added' : 'Add'}</button>;
+}
+```
+
 ### What causes hydration mismatches and how do you fix them?
 Server and client render different output: using `Date.now()`, `Math.random()`, `window`/`localStorage`, locale-dependent formatting, or invalid HTML nesting. Fix by rendering deterministic output, deferring client-only values to `useEffect`, using `suppressHydrationWarning` for unavoidable text, or rendering client-only components with dynamic import `ssr: false`.
+
+```jsx
+// ❌ different on server and client
+<p>{new Date().toLocaleTimeString()}</p>
+
+// ✅ render on the client after mount
+function Time() {
+  const [now, setNow] = useState(null);
+  useEffect(() => setNow(new Date().toLocaleTimeString()), []);
+  return <p>{now ?? '—'}</p>;
+}
+<span suppressHydrationWarning>{timestamp}</span>   // escape hatch for unavoidable diffs
+```
 
 ### How would you optimise a slow React application?
 Measure first with the Profiler and Performance panel. Then: avoid unnecessary re-renders (state colocation, memo, stable references, React Compiler), split code with `lazy`, virtualize long lists, debounce or defer expensive updates (transitions), move work to web workers, use a server-state cache, optimise images and bundles (tree-shaking, analyze), and use SSR/RSC for faster initial loads.
 
+```jsx
+const Chart = lazy(() => import('./Chart'));       // code-split heavy components
+function Dashboard({ rows }) {
+  return (
+    <Suspense fallback={<Spinner />}>
+      <Chart />
+      <FixedSizeList height={600} itemCount={rows.length} itemSize={36} width="100%">
+        {({ index, style }) => <div style={style}>{rows[index].name}</div>}
+      </FixedSizeList>
+    </Suspense>
+  );
+}
+// <Profiler id="Dashboard" onRender={(id, phase, ms) => console.log(id, phase, ms)}>
+```
+
 ### What is a stale closure in hooks and how do you fix it?
 A callback or effect captures state from the render it was created in; later it reads outdated values (e.g., an interval always logging `count = 0`). Fix with correct dependencies, functional updates (`setCount(c => c + 1)`), or a ref that always holds the latest value (`useEffectEvent`/latest-ref pattern).
+
+```jsx
+function Timer() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      // ❌ setCount(count + 1)   → count is always 0 from the first render
+      setCount((c) => c + 1);    // ✅ functional update
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+  // Or keep the latest value in a ref: latest.current = count;
+}
+```
 
 ### Explain `useSyncExternalStore`.
 A hook for subscribing to external stores (Redux, Zustand, browser APIs) safely under concurrent rendering. It takes `subscribe`, `getSnapshot` (and `getServerSnapshot`) and prevents "tearing" — different components seeing different versions of the store within one render.
 
+```jsx
+function subscribe(cb) {
+  window.addEventListener('online', cb);
+  window.addEventListener('offline', cb);
+  return () => { window.removeEventListener('online', cb); window.removeEventListener('offline', cb); };
+}
+function useOnlineStatus() {
+  return useSyncExternalStore(subscribe, () => navigator.onLine, () => true /* server snapshot */);
+}
+```
+
 ### How does React 18 automatic batching work?
 React groups multiple state updates into a single re-render regardless of where they occur — event handlers, promises, timeouts or native events. Previously only React event handlers were batched. `flushSync` forces a synchronous flush when needed (e.g., before measuring DOM).
+
+```jsx
+setTimeout(() => {
+  setCount((c) => c + 1);
+  setFlag((f) => !f);
+  // React 17: two renders; React 18+: one render
+}, 1000);
+
+import { flushSync } from 'react-dom';
+flushSync(() => setCount(1));   // opt out: render synchronously right now
+```
 
 ### What is the React Compiler?
 A build-time compiler that analyses components and hooks and automatically inserts memoization, so values, callbacks and JSX are cached when their inputs don't change. It assumes code follows the Rules of React (pure render, immutable props/state) and reduces the need for manual `useMemo`/`useCallback`/`memo`.
 
+```jsx
+// You write:
+function TodoList({ todos, filter }) {
+  const visible = todos.filter((t) => t.status === filter);
+  return <List items={visible} onSelect={(id) => select(id)} />;
+}
+// The compiler emits (conceptually) memoized code — no manual useMemo/useCallback:
+// const visible = useMemoCache(...) recomputed only when todos/filter change
+```
+```js babel.config.js
+module.exports = { plugins: [['babel-plugin-react-compiler', {}]] };
+```
+
 ### How would you design a large-scale React application architecture?
 Feature-based folder structure, a shared design system, clear separation of server state (TanStack Query/RSC) and client state (Zustand/Redux), routing with code splitting, typed API layer (TypeScript + Zod/OpenAPI), error boundaries per route, testing pyramid (RTL + MSW + Playwright), CI with lint/type-check, performance budgets, and monitoring (Sentry, Web Vitals). Consider a framework like Next.js for SSR/RSC and micro-frontends only if team scale demands it.
+
+```text
+src/
+  app/            routes, providers, layout
+  features/
+    checkout/     components/ hooks/ api.ts store.ts index.ts  ← public API of the feature
+    catalog/
+  shared/
+    ui/           design-system components
+    lib/          http client, formatting, auth
+```
+```ts features/checkout/index.ts
+export { CheckoutPage } from './components/CheckoutPage';
+export { useCart } from './hooks/useCart';   // other features import only from here
+```
 
 # Scenario Questions
 
@@ -620,8 +1016,31 @@ The input is being **unmounted and remounted** on each render. Common reasons:
 
 Move component definitions to module scope and use stable keys.
 
+```jsx
+function Form() {
+  const [name, setName] = useState('');
+  // ❌ new component type on every render → input is remounted
+  const Field = () => <input value={name} onChange={(e) => setName(e.target.value)} />;
+  return <Field />;
+}
+// ✅ define components at module level and pass props
+const Field = ({ value, onChange }) => <input value={value} onChange={onChange} />;
+// Also check for key={Math.random()} or keys that change on each render
+```
+
 ### Clicking "+1" three times quickly in a handler with `setCount(count + 1); setCount(count + 1);` only adds 1 per click. Why?
 Both calls read the same `count` from that render's closure, so they both set `count + 1`. Use the **functional updater** `setCount(c => c + 1)` when the next state depends on the previous one.
+
+```jsx
+function onClick() {
+  setCount(count + 1);  // count = 0 → 1
+  setCount(count + 1);  // count still 0 → 1
+}
+function onClickFixed() {
+  setCount((c) => c + 1); // 0 → 1
+  setCount((c) => c + 1); // 1 → 2
+}
+```
 
 ## Intermediate
 
@@ -633,6 +1052,19 @@ The effect updates state that's in its own dependency array, or a dependency is 
 
 Better still, use a data library (TanStack Query, SWR), which handles caching, deduplication and race conditions.
 
+```jsx
+// ❌ options is a new object every render → effect re-runs → setData → render → …
+const options = { page };
+useEffect(() => { fetchItems(options).then(setData); }, [options]);
+
+// ✅ depend on primitives (or useMemo the object)
+useEffect(() => {
+  let ignore = false;
+  fetchItems({ page }).then((d) => { if (!ignore) setData(d); });
+  return () => { ignore = true; };
+}, [page]);
+```
+
 ### A 10,000-row table makes typing in the filter box laggy. How do you make it fast?
 1. **Virtualize** the list (TanStack Virtual, react-window) so only visible rows render.
 2. Keep the input responsive with `useDeferredValue(filter)` or `startTransition`.
@@ -640,6 +1072,29 @@ Better still, use a data library (TanStack Query, SWR), which handles caching, d
 4. Do the filtering in `useMemo`, or on the server with pagination.
 
 Profile with React DevTools Profiler before and after.
+
+```jsx
+import { useVirtualizer } from '@tanstack/react-virtual';
+function Table({ rows }) {
+  const [filter, setFilter] = useState('');
+  const deferred = useDeferredValue(filter);
+  const visible = useMemo(() => rows.filter((r) => r.name.includes(deferred)), [rows, deferred]);
+  const parentRef = useRef(null);
+  const v = useVirtualizer({ count: visible.length, getScrollElement: () => parentRef.current, estimateSize: () => 36 });
+  return (
+    <>
+      <input value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <div ref={parentRef} style={{ height: 600, overflow: 'auto' }}>
+        <div style={{ height: v.getTotalSize(), position: 'relative' }}>
+          {v.getVirtualItems().map((i) => (
+            <div key={i.key} style={{ position: 'absolute', top: i.start, height: 36 }}>{visible[i.index].name}</div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+```
 
 ## Advanced
 
@@ -653,11 +1108,33 @@ Find what differs between server and client output:
 
 Reproduce with the user's locale or timezone. Fix with deterministic rendering, by moving client-only values into `useEffect` or a client component, or by passing server-computed values down as props.
 
+```jsx
+// Typical culprit: locale/timezone dependent formatting during render
+<p>{new Intl.DateTimeFormat(undefined).format(order.date)}</p>    // server tz ≠ user tz
+
+// Fix: format with a fixed locale/timezone, or render on the client only
+<p>{new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC' }).format(order.date)}</p>
+const LocalTime = dynamic(() => import('./LocalTime'), { ssr: false });
+```
+
 ### Your app's global Context causes every component to re-render on each keystroke. How do you restructure it?
 Every consumer re-renders whenever the context **value** changes. Options:
 - **Split contexts** by update frequency (state and dispatch apart).
 - Memoize the value object.
 - Keep fast-changing state local, or in a store with **selectors** (Zustand, Redux, `useSyncExternalStore`) so components subscribe only to the slice they use.
+
+```jsx
+// Move fast-changing state out of the global context into a store with selectors
+import { create } from 'zustand';
+const useFormStore = create((set) => ({ search: '', setSearch: (search) => set({ search }) }));
+
+function SearchBox() {
+  const search = useFormStore((s) => s.search);      // re-renders only when search changes
+  const setSearch = useFormStore((s) => s.setSearch);
+  return <input value={search} onChange={(e) => setSearch(e.target.value)} />;
+}
+function Header() { const user = useContext(UserContext); /* unaffected by typing */ }
+```
 
 # Tricky Questions
 
@@ -665,6 +1142,12 @@ Every consumer re-renders whenever the context **value** changes. Options:
 
 ### What renders when `items` is an empty array? `{items.length && <List items={items} />}`
 A literal **`0`** on the screen. `0 && x` evaluates to `0`, and React renders numbers. Use `items.length > 0 && …` or a ternary.
+
+```jsx
+{items.length && <List items={items} />}        // renders "0"
+{items.length > 0 && <List items={items} />}    // ✅ renders nothing
+{items.length ? <List items={items} /> : null}  // ✅
+```
 
 ### What gets logged?
 ```jsx
@@ -690,7 +1173,23 @@ The empty dependency array means the effect runs once and captures `count` from 
 ### In development, your effect's fetch runs twice and the API logs two calls. Is this a bug?
 It's **Strict Mode** in React 18+ development: it mounts, unmounts and re-mounts components to surface effects that lack cleanup. Production calls it once. Don't disable it. Make the effect safe to repeat: abort the request in the cleanup, or use a data library that deduplicates requests.
 
+```jsx
+useEffect(() => {
+  const controller = new AbortController();
+  fetch(`/api/user/${id}`, { signal: controller.signal })
+    .then((r) => r.json()).then(setUser)
+    .catch((e) => { if (e.name !== 'AbortError') throw e; });
+  return () => controller.abort();   // first (Strict Mode) request is cancelled
+}, [id]);
+```
+
 ## Advanced
 
 ### Items in a list are deleted, and the wrong row's input keeps the typed text. Why?
 The list uses `key={index}`. After a delete, the indexes shift and React reuses the DOM and state of the old index for a different item. Use a **stable unique id** as the key.
+
+```jsx
+{items.map((item, i) => <Row key={i} item={item} />)}        // ❌ index key
+{items.map((item) => <Row key={item.id} item={item} />)}     // ✅ stable id
+// New items without an id: const id = crypto.randomUUID() when you create them, not during render
+```

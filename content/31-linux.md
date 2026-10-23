@@ -15,6 +15,16 @@ summary: Filesystem, essential commands, permissions, processes, package managem
 
 Linux is the OS behind most servers, containers and cloud VMs. A **distribution** bundles the Linux kernel with tools and a package manager: **RHEL/Rocky/Alma/Fedora** (dnf/rpm), **Ubuntu/Debian** (apt/deb), Alpine (apk, common in containers), SUSE (zypper).
 
+```bash
+cat /etc/os-release              # which distro
+pwd; ls -lah /var/log            # where am I, what's here
+cd /etc && cd - && cd ~          # previous dir, home
+mkdir -p /opt/app/{bin,logs}; cp -r src/ /opt/app/; mv a.txt b.txt; rm -i old.txt
+find /var/log -name "*.log" -mtime -1 -size +10M
+grep -rn "ERROR" /var/log/app/ | head
+sudo dnf install -y nginx        # RHEL family   |  sudo apt install -y nginx  (Debian/Ubuntu)
+```
+
 ### Architecture
 Hardware → **kernel** (process scheduling, memory, drivers, filesystems, networking) → system calls → shell and user programs. The **shell** (bash, zsh, sh) interprets commands.
 
@@ -304,6 +314,16 @@ dmesg -T | grep -i -E "oom|error"     # kernel messages: OOM kills, hardware err
 
 ## Kernel, Memory, Boot and Containers Under the Hood
 
+```bash
+systemd-analyze blame | head           # slowest boot units
+systemctl get-default                  # multi-user.target
+free -h                                # "available" is what matters, cache is reclaimable
+cat /proc/meminfo | grep -E 'MemAvailable|Cached|SwapTotal'
+cat /proc/$(pgrep -f nginx | head -1)/status | grep -E 'VmRSS|Threads'
+sysctl vm.swappiness net.core.somaxconn
+lsns                                   # namespaces on the host (container processes show up here)
+```
+
 ### Boot process
 BIOS/UEFI → bootloader (GRUB2) → kernel + initramfs → **systemd** (PID 1) → targets (`multi-user.target`, `graphical.target`) → services.
 
@@ -331,6 +351,21 @@ Partitions (`lsblk`, `fdisk`, `parted`), filesystems (ext4, **XFS** default on R
 - CIS benchmarks and automated compliance scans (OpenSCAP, Lynis).
 - Encrypt disks (LUKS) and secrets; rotate credentials.
 
+```text /etc/ssh/sshd_config.d/hardening.conf
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AllowGroups ssh-users
+MaxAuthTries 3
+```
+```bash
+sudo systemctl reload sshd
+sudo firewall-cmd --permanent --add-service=https && sudo firewall-cmd --reload   # or: ufw allow 443/tcp
+sudo dnf install -y dnf-automatic && sudo systemctl enable --now dnf-automatic.timer
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin appsvc
+getenforce                               # SELinux Enforcing
+```
+
 # Interview Questions
 
 ## Beginner
@@ -338,57 +373,222 @@ Partitions (`lsblk`, `fdisk`, `parted`), filesystems (ext4, **XFS** default on R
 ### How do you check disk space and find what's using it?
 `df -h` shows free space per filesystem; `du -sh /path/*` (or `du -xsh /* | sort -h`) shows which directories use the most space. Also check inode usage with `df -i` and deleted-but-open files with `lsof +L1`.
 
+```bash
+df -h                                    # free space per filesystem
+df -i                                    # inodes
+sudo du -xh --max-depth=1 / 2>/dev/null | sort -h | tail
+sudo du -sh /var/log/* | sort -h
+sudo lsof +L1                            # deleted files still held open
+ncdu /var                                # interactive
+```
+
 ### Explain Linux file permissions.
 Each file has owner, group and others permissions of read (4), write (2) and execute (1). `chmod 755` gives the owner rwx and others r-x. On directories, x allows entering and r allows listing. `chown` changes ownership.
+
+```bash
+ls -l deploy.sh            # -rwxr-x--- 1 ada devops  deploy.sh
+chmod 750 deploy.sh        # owner rwx, group r-x, others ---
+chmod u+x,g-w file
+chown appsvc:appsvc /opt/app -R
+chmod 2775 /srv/shared     # setgid: new files inherit the group
+chmod +t /tmp/shared       # sticky: only owners can delete their files
+umask 027
+```
 
 ### How do you find a process using a port and stop it?
 `ss -tulpn | grep :8080` (or `lsof -i :8080`) shows the PID; stop it gracefully with `kill <pid>` (SIGTERM) and use `kill -9` only if it doesn't exit. For services, prefer `systemctl stop <service>`.
 
+```bash
+sudo ss -tulpn | grep :8080          # users:(("node",pid=4123,fd=21))
+sudo lsof -i :8080
+kill 4123                            # SIGTERM first
+sleep 5; kill -0 4123 2>/dev/null && kill -9 4123
+sudo systemctl stop myapp            # if it's a service
+sudo fuser -k 8080/tcp
+```
+
 ### What is the difference between a hard link and a soft link?
 A hard link is another directory entry pointing to the same inode — it works even if the original name is removed but can't cross filesystems or link directories. A symbolic (soft) link is a separate file containing a path — it can cross filesystems and point to directories but breaks if the target is removed.
+
+```bash
+echo hi > original.txt
+ln original.txt hard.txt          # same inode
+ln -s original.txt soft.txt       # pointer to the path
+ls -li original.txt hard.txt soft.txt
+rm original.txt
+cat hard.txt                      # hi   — data still referenced
+cat soft.txt                      # No such file or directory — dangling
+```
 
 ### How do you view logs in real time?
 `tail -f /var/log/app.log` for files, `journalctl -u <service> -f` for systemd services, and `kubectl logs -f` or `docker logs -f` in containers.
 
+```bash
+tail -f /var/log/nginx/access.log
+tail -F app.log                          # follows across log rotation
+journalctl -u myapp -f
+journalctl -u myapp --since "10 min ago" -p err
+less +F /var/log/messages
+kubectl logs -f deploy/api --all-containers; docker logs -f --tail 100 web
+```
+
 ### What does `chmod 777` mean and why is it dangerous?
 It grants read, write and execute permissions to everyone. Any user or compromised process could modify or replace the file, so it's a common security hole; grant the minimum necessary permissions instead.
+
+```bash
+chmod 777 /var/www/uploads      # ❌ any user/process can replace files (e.g. drop a web shell)
+chown www-data:www-data /var/www/uploads && chmod 750 /var/www/uploads   # ✅ only what's needed
+find / -xdev -type f -perm -0002 2>/dev/null   # audit world-writable files
+```
 
 ## Intermediate
 
 ### What is the difference between SIGTERM and SIGKILL?
 SIGTERM (15) asks a process to terminate and can be caught so it can clean up gracefully. SIGKILL (9) immediately terminates it at the kernel level and can't be caught or ignored — no cleanup happens.
 
+```bash
+kill -TERM 4123        # polite: process can clean up
+kill -KILL 4123        # immediate, can't be caught
+```
+```bash Catching SIGTERM in a script
+cleanup() { echo "flushing…"; rm -f /tmp/app.lock; exit 0; }
+trap cleanup TERM INT
+while true; do sleep 1; done
+```
+
 ### What is a zombie process?
 A process that has finished executing but still has an entry in the process table because its parent hasn't read its exit status (`wait()`). Zombies consume a PID but no resources; fix by fixing or restarting the parent process (or ensuring an init like tini reaps children in containers).
+
+```bash
+ps -eo pid,ppid,stat,cmd | awk '$3 ~ /Z/'   # STAT Z = zombie
+ps -o ppid= -p <zombie_pid>                 # its parent
+kill -s SIGCHLD <parent_pid>                # ask parent to reap; or restart the parent
+docker run --init myimage                   # tini reaps zombies inside containers
+```
 
 ### How do you create a systemd service for an application?
 Write a unit file in `/etc/systemd/system/<name>.service` with `[Unit]`, `[Service]` (User, WorkingDirectory, ExecStart, Restart, EnvironmentFile) and `[Install]` sections, then run `systemctl daemon-reload` and `systemctl enable --now <name>`; check with `systemctl status` and `journalctl -u`.
 
+```ini /etc/systemd/system/orders-api.service
+[Unit]
+Description=Orders API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=appsvc
+WorkingDirectory=/opt/orders
+EnvironmentFile=/etc/orders/env
+ExecStart=/usr/bin/node /opt/orders/server.js
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now orders-api
+systemctl status orders-api && journalctl -u orders-api -f
+```
+
 ### What does `set -euo pipefail` do in Bash?
 `-e` exits on any command failure, `-u` treats unset variables as errors, and `-o pipefail` makes a pipeline fail if any command in it fails — making scripts fail fast instead of continuing in a broken state.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+cp config.yml /etc/app/           # -e: script stops here if cp fails
+echo "Deploying ${ENVIRONMENT}"   # -u: error if ENVIRONMENT is unset
+curl -fsS "$URL" | jq .status     # pipefail: curl failure fails the pipeline
+trap 'echo "failed at line $LINENO" >&2' ERR
+```
 
 ### How do you find the top 10 IP addresses in an access log?
 `awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -10` — extract the first field, count unique values, sort by count descending and take the top ten.
 
+```bash
+awk '{print $1}' access.log | sort | uniq -c | sort -rn | head -10
+# Top 10 IPs hitting 5xx in the last part of the log
+tail -100000 access.log | awk '$9 ~ /^5/ {print $1}' | sort | uniq -c | sort -rn | head
+```
+
 ### What is load average?
 The average number of processes running or waiting for CPU (and, on Linux, in uninterruptible I/O wait) over 1, 5 and 15 minutes. Compare it with the number of CPU cores: a load consistently above the core count indicates saturation.
+
+```bash
+uptime            # load average: 3.10, 2.80, 2.50   (1, 5, 15 min)
+nproc             # 4 → 3.1/4 ≈ 78% busy
+cat /proc/loadavg
+ps -eo stat,pid,cmd | awk '$1 ~ /D/'   # processes in uninterruptible I/O count towards load too
+```
 
 ## Advanced
 
 ### A server is slow — how do you troubleshoot it?
 Check `uptime` load versus cores, then `top`/`htop` for CPU-heavy processes and I/O wait, `free -h` and `vmstat` for memory pressure and swapping, `iostat`/`iotop` for disk latency, `ss`/`sar` for network issues, `dmesg` for OOM or hardware errors, and application logs. Then drill into the culprit process with `strace`, `perf` or language-specific profilers.
 
+```bash
+uptime                      # load vs nproc
+top -o %CPU                 # or htop: CPU hogs, %wa = I/O wait
+free -h; vmstat 1 5         # memory, si/so swapping, r = run queue
+iostat -xz 1 3              # %util, await per disk
+ss -s; ss -tan state established | wc -l   # connections
+dmesg -T | tail -20         # OOM kills, disk errors
+sar -n DEV 1 3              # network throughput
+```
+
 ### The disk shows full but you can't find large files. Why?
 Most likely a process still holds deleted files open (common with rotated logs), so space isn't released — find them with `lsof +L1` and restart or truncate. Other causes: inode exhaustion (`df -i`), files hidden under a mount point, or reserved blocks for root.
+
+```bash
+sudo lsof +L1 | sort -k7 -n | tail         # deleted-but-open files and sizes
+sudo truncate -s 0 /proc/<pid>/fd/<fd>     # free space without restarting
+sudo systemctl restart rsyslog             # or restart the holder
+df -i                                       # inode exhaustion?
+sudo du -xsh /var/lib/docker /var/log       # hidden under mount points or container data
+```
 
 ### How does the OOM killer work?
 When the kernel can't satisfy memory allocations, it selects a process to kill based on its `oom_score` (memory usage, adjusted by `oom_score_adj`) and sends SIGKILL. In containers, cgroup memory limits trigger OOM kills within the cgroup. Logs appear in `dmesg`/`journalctl -k`.
 
+```bash
+dmesg -T | grep -i -E 'out of memory|killed process'
+cat /proc/<pid>/oom_score
+echo -1000 | sudo tee /proc/<pid>/oom_score_adj     # protect a critical process
+```
+```ini systemd unit
+[Service]
+OOMScoreAdjust=-500
+MemoryMax=2G          # cgroup limit: the service is killed before the whole box suffers
+```
+
 ### How would you harden a Linux server?
 Patch regularly, use SSH keys with root login and passwords disabled, restrict access via firewall and bastion, apply least privilege with dedicated users and limited sudo, keep SELinux enforcing, remove unused services, enable auditing and central logging, run CIS benchmark scans and encrypt sensitive data.
 
+```bash
+sudo dnf update -y && sudo dnf install -y dnf-automatic fail2ban
+sudo systemctl enable --now fail2ban
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo firewall-cmd --set-default-zone=drop && sudo firewall-cmd --permanent --add-service=ssh --add-service=https
+sudo systemctl disable --now cups avahi-daemon     # remove unused services
+sudo auditctl -w /etc/passwd -p wa -k identity      # audit changes
+```
+
 ### Explain how Linux namespaces and cgroups enable containers.
 Namespaces isolate what a process can see — its own PIDs, network stack, mounts, hostname, IPC and user IDs. Cgroups limit and account for resources like CPU, memory, I/O and PIDs. Combined with layered filesystems and security modules, they make an ordinary process behave like an isolated container.
+
+```bash
+sudo unshare --fork --pid --mount-proc --uts --net bash   # new PID, UTS and net namespaces
+hostname container-demo && ps aux                          # only this shell, PID 1
+ip link                                                    # only lo
+# cgroup v2 limit
+sudo mkdir /sys/fs/cgroup/demo
+echo 100M | sudo tee /sys/fs/cgroup/demo/memory.max
+echo $$ | sudo tee /sys/fs/cgroup/demo/cgroup.procs        # this shell is now capped at 100 MB
+```
 
 # Scenario Questions
 
@@ -397,13 +597,37 @@ Namespaces isolate what a process can see — its own PIDs, network stack, mount
 ### The server says "No space left on device", but `df -h` shows free space. What's going on?
 You've run out of **inodes** (millions of tiny files): check `df -i`. Or a **deleted file is still held open** by a process, so the space isn't freed until it closes: `lsof +L1` finds it, then restart the process. Also check that you're looking at the right mount point.
 
+```bash
+df -i /var                                  # IUse% 100% → inodes exhausted
+sudo find /var -xdev -type f | cut -d/ -f2-4 | sort | uniq -c | sort -rn | head   # dirs with most files
+sudo find /var/lib/php/sessions -type f -mtime +7 -delete
+sudo lsof +L1                               # or space held by deleted files
+```
+
 ### A script works when you run it, but fails from cron. Why?
 Cron runs with a **minimal environment**: a different `PATH`, no `.bashrc`/profile, a different working directory and `sh` instead of `bash`. Use absolute paths, set `PATH` and `SHELL` in the crontab, `cd` into the right directory, and redirect output to a log (`>> /var/log/job.log 2>&1`) to see the errors.
+
+```bash crontab -e
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=ops@example.com
+*/15 * * * * cd /opt/reports && /usr/bin/python3 /opt/reports/run.py >> /var/log/reports.log 2>&1
+```
+```bash
+env -i /bin/sh -c '/opt/reports/run.sh'   # reproduce cron's minimal environment
+```
 
 ## Intermediate
 
 ### The server load average is 30 on a 4-core machine, but CPU usage is low. What do you check?
 Load average counts processes **waiting for I/O** (D state), not just those running on CPU. Check `top`/`htop` for `wa` (I/O wait), `iostat -x 1` for disk saturation, `vmstat 1` for swapping, and NFS mounts that hang. Find the processes with `iotop` or `ps -eo state,pid,cmd | grep '^D'`.
+
+```bash
+top                          # %wa high → waiting on I/O
+iostat -xz 1                 # %util ~100, await 200ms → disk saturated
+ps -eo stat,pid,wchan:20,cmd | awk '$1 ~ /^D/'   # stuck processes and what they wait on
+mount | grep nfs; nfsstat -c # hung NFS mounts are a classic cause
+```
 
 ### A web server is slow and you suspect memory. How do you confirm it?
 - `free -h`: remember that "available" matters, not "free", because Linux uses spare RAM for cache.
@@ -412,10 +636,29 @@ Load average counts processes **waiting for I/O** (D state), not just those runn
 - `ps aux --sort=-%mem | head`: find the biggest processes.
 - `/proc/<pid>/status`: per-process detail.
 
+```bash
+free -h                      # look at "available", not "free"
+vmstat 1 10                  # si/so > 0 continuously → swapping
+dmesg -T | grep -i oom
+ps aux --sort=-%mem | head
+smem -tk 2>/dev/null | tail -5
+cat /sys/fs/cgroup/memory.pressure 2>/dev/null   # PSI: some/full stall times
+```
+
 ## Advanced
 
 ### Production servers occasionally can't open new connections: "Too many open files". How do you fix it?
 The process has hit its **file-descriptor limit**. Check `ulimit -n` and `cat /proc/<pid>/limits`, and count open fds with `ls /proc/<pid>/fd | wc -l`. Raise the limit in the systemd unit (`LimitNOFILE=`) or `/etc/security/limits.conf`. Also look for fd leaks (sockets and files never closed), and tune `net.ipv4.ip_local_port_range` and TIME_WAIT reuse for outbound-heavy services.
+
+```bash
+cat /proc/$(pgrep -f server.js)/limits | grep "open files"   # Max open files 1024
+ls /proc/$(pgrep -f server.js)/fd | wc -l                     # 1021
+sudo lsof -p $(pgrep -f server.js) | awk '{print $5}' | sort | uniq -c   # many IPv4 → leaked sockets?
+```
+```ini systemd override: sudo systemctl edit myapp
+[Service]
+LimitNOFILE=65536
+```
 
 # Tricky Questions
 
@@ -424,13 +667,44 @@ The process has hit its **file-descriptor limit**. Check `ulimit -n` and `cat /p
 ### What's the difference? `cmd > out.txt 2>&1` vs `cmd 2>&1 > out.txt`
 Redirections are processed **left to right**. In the first, stdout goes to the file and then stderr is pointed at where stdout now points (the file), so both end up in the file. In the second, stderr is pointed at the *current* stdout (the terminal) and only then is stdout redirected to the file, so errors still appear on screen.
 
+```bash
+ls /nope /tmp > out.txt 2>&1    # both stdout and stderr in out.txt
+ls /nope /tmp 2>&1 > out.txt    # error on the terminal, listing in out.txt
+ls /nope /tmp &> out.txt        # bash shorthand for the first form
+```
+
 ### Why does `rm -rf $DIR/` scare reviewers?
 If `DIR` is empty or unset, the command becomes `rm -rf /`. Quote variables, and fail on unset ones with `set -u` or `${DIR:?DIR not set}`. Start scripts with `set -euo pipefail`.
+
+```bash
+DIR=""
+rm -rf $DIR/                      # → rm -rf /   ❌
+rm -rf "${DIR:?DIR is not set}"/  # ✅ aborts with an error if empty/unset
+set -u                            # unset variables become errors
+```
 
 ## Intermediate
 
 ### What does this print? `count=0; cat file.txt | while read line; do count=$((count+1)); done; echo $count`
 **0**. Each part of a pipeline runs in a **subshell**, so the loop's `count` is lost. Use redirection instead, `while read -r line; do …; done < file.txt`, or `shopt -s lastpipe`.
 
+```bash
+count=0
+cat file.txt | while read -r line; do count=$((count+1)); done
+echo "$count"                     # 0 — loop ran in a subshell
+
+count=0
+while read -r line; do count=$((count+1)); done < file.txt
+echo "$count"                     # 3 (number of lines)
+```
+
 ### `chmod 644` on a directory: can users `cd` into it?
 **No.** On directories, `x` (execute) means permission to traverse or enter, and `r` only lets you list names. Directories usually need `755` (or `750`), and files `644`.
+
+```bash
+mkdir demo && chmod 644 demo
+cd demo                     # Permission denied (no x)
+ls demo                     # names listed, but "cannot access …: Permission denied" for details
+chmod 755 demo && cd demo   # ✅
+find /srv -type d -exec chmod 755 {} + ; find /srv -type f -exec chmod 644 {} +
+```

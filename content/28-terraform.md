@@ -15,6 +15,20 @@ summary: IaC principles, HCL, providers, resources, variables, state and backend
 
 **Infrastructure as Code (IaC)** manages infrastructure (networks, servers, databases, DNS, permissions) through **versioned, declarative code** instead of manual console clicks.
 
+```hcl Declarative: describe the end state, Terraform works out the steps
+resource "aws_s3_bucket" "assets" {
+  bucket = "acme-assets-${var.env}"
+  tags   = { env = var.env, managed_by = "terraform" }
+}
+resource "aws_s3_bucket_versioning" "assets" {
+  bucket = aws_s3_bucket.assets.id
+  versioning_configuration { status = "Enabled" }
+}
+```
+```bash
+terraform fmt -check && terraform validate && terraform plan -out tfplan && terraform apply tfplan
+```
+
 ### Benefits
 Repeatability (identical dev/staging/prod) · version control and code review · automation in CI/CD · documentation by code · faster recovery (rebuild from code) · drift detection · policy enforcement.
 
@@ -291,6 +305,20 @@ Best practices: pin versions (`?ref=` tags, registry `version`), small focused m
 - **Terragrunt** — wrapper to keep backend/provider config DRY across many environments/stacks.
 - **HCP Terraform / Terraform Enterprise workspaces** — remote runs, state, variables, RBAC, policy checks, private registry.
 
+```bash Workspaces
+terraform workspace new staging
+terraform workspace select prod
+terraform plan -var-file=prod.tfvars     # name = "app-${terraform.workspace}"
+```
+```text Directory per environment (preferred for real isolation)
+infra/
+  modules/app/            # shared, versioned
+  envs/dev/main.tf        # module "app" { source = "../../modules/app" instance_type = "t3.small" }
+  envs/dev/backend.tf     # key = "dev/app.tfstate"
+  envs/prod/main.tf
+  envs/prod/backend.tf    # key = "prod/app.tfstate"
+```
+
 # Advanced
 
 ## Terraform in CI/CD and Team Workflows
@@ -325,6 +353,20 @@ Practices:
 - Tools: Atlantis (PR automation), Spacelift, env0, HCP Terraform.
 
 ## Drift, Troubleshooting and Gotchas
+
+```bash
+terraform plan -detailed-exitcode          # 0 = no changes, 1 = error, 2 = drift/changes
+terraform plan -refresh-only               # show what changed outside Terraform
+terraform apply -refresh-only              # accept reality into state
+terraform state list | grep aws_security_group
+terraform force-unlock <LOCK_ID>           # only when you're sure no apply is running
+TF_LOG=DEBUG terraform plan 2> debug.log
+```
+```hcl Ignore attributes another system owns
+resource "aws_autoscaling_group" "web" {
+  lifecycle { ignore_changes = [desired_capacity] }
+}
+```
 
 ### Drift
 Changes made outside Terraform (console clicks) make reality differ from state/config. Detect with scheduled `terraform plan -detailed-exitcode` (exit 2 = changes) or `terraform plan -refresh-only`; then either codify the change or revert it by applying.
@@ -379,54 +421,272 @@ Concepts: inventory (static/dynamic), modules, playbooks, roles (reusable struct
 ### What is Infrastructure as Code and why use it?
 Managing infrastructure through versioned, machine-readable definitions instead of manual processes. It brings repeatability, consistency across environments, code review, automation, auditability, faster disaster recovery and drift detection.
 
+```hcl
+module "network" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.13.0"                    # same code + same version = same infrastructure
+  name    = "shop-${var.env}"
+  cidr    = "10.0.0.0/16"
+}
+```
+```bash
+git log --oneline infra/   # every infrastructure change reviewed and auditable like app code
+```
+
 ### What does `terraform plan` do?
 It refreshes the known state of real resources, compares it with the configuration, and shows the actions Terraform would take — create, update in place, replace or destroy — without making changes. Saving the plan (`-out`) lets you apply exactly what was reviewed.
+
+```text
+Terraform will perform the following actions:
+  # aws_instance.web will be updated in-place
+  ~ resource "aws_instance" "web" {
+      ~ instance_type = "t3.small" -> "t3.medium"
+    }
+  # aws_db_instance.main must be replaced
+-/+ resource "aws_db_instance" "main" {
+      ~ identifier = "orders" -> "orders-v2" # forces replacement
+    }
+Plan: 1 to add, 1 to change, 1 to destroy.
+```
 
 ### What is a provider?
 A plugin that lets Terraform interact with an API — such as AWS, Azure, GCP, Kubernetes or GitHub — exposing resources and data sources. Providers are declared in `required_providers` with version constraints and downloaded by `terraform init`.
 
+```hcl
+terraform {
+  required_version = ">= 1.7"
+  required_providers {
+    aws    = { source = "hashicorp/aws", version = "~> 5.70" }
+    github = { source = "integrations/github", version = "~> 6.0" }
+  }
+}
+provider "aws" {
+  region = "eu-west-1"
+  default_tags { tags = { team = "shop" } }
+}
+provider "aws" {
+  alias  = "us"
+  region = "us-east-1"            # e.g. ACM certificates for CloudFront
+}
+```
+
 ### Resource vs data source?
 A resource block creates and manages infrastructure. A data source reads information about existing infrastructure or external data (like the latest AMI ID or an existing VPC) without managing it.
 
+```hcl
+data "aws_ami" "al2023" {                 # read existing
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
+resource "aws_instance" "web" {           # create and manage
+  ami           = data.aws_ami.al2023.id
+  instance_type = "t3.small"
+}
+```
+
 ### What is the Terraform state file?
 A JSON file mapping configuration to real-world resources with their attributes and dependencies. Terraform uses it to plan changes, track metadata and improve performance. It must be stored securely and shared via a remote backend with locking for teams.
+
+```bash
+terraform state list
+terraform state show aws_instance.web
+terraform show -json | jq '.values.root_module.resources[] | {address, type}'
+terraform state pull > backup.tfstate     # snapshot before risky surgery
+```
 
 ## Intermediate
 
 ### Why use a remote backend with state locking?
 So teams share a single source of truth for state, avoid losing local files, encrypt sensitive data at rest, and prevent concurrent applies from corrupting state — locking ensures only one operation modifies state at a time.
 
+```hcl
+terraform {
+  backend "s3" {
+    bucket       = "acme-tf-state"
+    key          = "shop/prod/terraform.tfstate"
+    region       = "eu-west-1"
+    encrypt      = true
+    use_lockfile = true          # native S3 locking (older setups: dynamodb_table = "tf-locks")
+  }
+}
+```
+
 ### count vs for_each?
 `count` creates N copies indexed by number — removing an item in the middle shifts indexes and may recreate resources. `for_each` iterates over a map or set with stable keys, so items can be added or removed without affecting others. Prefer `for_each` for distinct resources.
+
+```hcl
+variable "users" { default = ["ana", "bob", "cy"] }
+
+resource "aws_iam_user" "by_count" {
+  count = length(var.users)
+  name  = var.users[count.index]         # aws_iam_user.by_count[1] = "bob"
+}
+resource "aws_iam_user" "by_key" {
+  for_each = toset(var.users)
+  name     = each.key                    # aws_iam_user.by_key["bob"]
+}
+resource "aws_eip" "nat" {
+  count = var.create_nat ? 1 : 0         # count is still great for on/off
+}
+```
 
 ### What are Terraform modules and best practices for them?
 Reusable packages of Terraform configuration with inputs and outputs. Best practices: keep them focused, version and pin them, document inputs/outputs, avoid hard-coded values and provider configs inside, provide examples, and test them.
 
+```hcl modules/bucket/main.tf
+variable "name" { type = string }
+variable "versioning" {
+  type    = bool
+  default = true
+}
+resource "aws_s3_bucket" "this" { bucket = var.name }
+output "arn" { value = aws_s3_bucket.this.arn }
+```
+```hcl Caller
+module "invoices" {
+  source     = "git::https://github.com/acme/tf-modules.git//bucket?ref=v1.3.0"   # pinned
+  name       = "acme-invoices-prod"
+  versioning = true
+}
+output "invoices_arn" { value = module.invoices.arn }
+```
+
 ### How do you manage multiple environments?
 Typically a directory per environment with its own backend and variables, all calling shared versioned modules; or Terragrunt for DRY configuration; or HCP Terraform workspaces. CLI workspaces suit near-identical environments but risk mistakes in production.
+
+```hcl envs/prod/main.tf
+module "app" {
+  source         = "../../modules/app"
+  env            = "prod"
+  instance_count = 6
+  instance_type  = "m7g.large"
+}
+```
+```hcl terragrunt.hcl (DRY alternative)
+include "root" { path = find_in_parent_folders() }
+terraform { source = "git::https://github.com/acme/tf-modules.git//app?ref=v2.1.0" }
+inputs = { env = "prod", instance_count = 6 }
+```
 
 ### How do you bring existing resources under Terraform?
 Write or generate matching configuration and use `import` blocks (or `terraform import`) to add them to state, then run plan until it shows no changes. Terraform 1.5+ can generate configuration for imported resources with `-generate-config-out`.
 
+```hcl
+import {
+  to = aws_s3_bucket.legacy
+  id = "acme-legacy-uploads"
+}
+```
+```bash
+terraform plan -generate-config-out=generated.tf   # Terraform writes the matching resource block
+terraform apply                                     # imports into state; then plan should show no changes
+```
+
 ### How do you handle secrets in Terraform?
 Mark variables `sensitive`, supply values from environment variables or CI secret stores, read secrets from vaults at apply time (or have apps fetch them at runtime), encrypt and restrict access to remote state, and never commit `tfvars` containing secrets.
+
+```hcl
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+resource "aws_db_instance" "main" {
+  manage_master_user_password = true      # better: RDS generates & stores it in Secrets Manager
+}
+data "aws_secretsmanager_secret_version" "api" { secret_id = "prod/api-key" }
+```
+```bash
+export TF_VAR_db_password="$(vault kv get -field=password secret/db)"   # never in .tfvars committed to git
+```
 
 ## Advanced
 
 ### What is configuration drift and how do you handle it?
 Drift is when real infrastructure diverges from Terraform state and code due to manual or external changes. Detect it with scheduled plans or refresh-only plans, then either update the code to match intentional changes or re-apply to revert unauthorised ones, and prevent it with restricted console access and policies.
 
+```yaml Nightly drift check in CI
+on: { schedule: [{ cron: "0 6 * * *" }] }
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init -input=false
+      - run: terraform plan -detailed-exitcode -lock=false || { [ $? -eq 2 ] && echo "::warning::Drift detected"; exit 1; }
+```
+
 ### How would you structure Terraform for a large organisation?
 Versioned shared modules in a registry, separate state per environment and component to limit blast radius, remote backends with locking, CI/CD with plan-on-PR and apply-on-merge, OIDC-based credentials, policy as code (Sentinel/OPA), static analysis and cost checks, clear ownership, and documentation.
+
+```text
+tf-modules/ (registry, semver tags)      network/  eks/  rds/  iam-role/
+live/
+  prod/
+    network/      backend key: prod/network.tfstate
+    eks/          reads network outputs via terraform_remote_state / data sources
+    shop-db/
+  staging/ …
+policies/ (OPA/Sentinel): no public S3, required tags, allowed instance types
+```
 
 ### Terraform vs Ansible?
 Terraform is declarative provisioning of infrastructure with state, ideal for creating cloud resources. Ansible is agentless configuration management that runs ordered tasks on existing machines, ideal for configuring software. They're complementary: provision with Terraform, configure or bake images with Ansible.
 
+```hcl Terraform: provision the VM
+resource "aws_instance" "web" {
+  ami           = data.aws_ami.al2023.id
+  instance_type = "t3.small"
+  tags          = { role = "web" }
+}
+```
+```yaml Ansible: configure what runs on it
+- hosts: tag_role_web
+  become: true
+  tasks:
+    - ansible.builtin.dnf: { name: nginx, state: present }
+    - ansible.builtin.template: { src: nginx.conf.j2, dest: /etc/nginx/nginx.conf }
+      notify: restart nginx
+  handlers:
+    - name: restart nginx
+      ansible.builtin.service: { name: nginx, state: restarted }
+```
+
 ### What happens if two engineers run `terraform apply` at the same time?
 With a locking backend, the second run fails to acquire the lock and waits or errors, preventing corruption. Without locking, both could write state concurrently, causing lost updates, duplicate resources or a corrupted state file.
 
+```text
+Error: Error acquiring the state lock
+Lock Info:
+  ID:        6b1c…
+  Path:      acme-tf-state/shop/prod/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       ada@laptop
+```
+```bash
+terraform apply -lock-timeout=5m    # wait for the lock instead of failing immediately
+```
+
 ### How do you refactor Terraform code without destroying resources?
 Use `moved` blocks (or `terraform state mv`) to map old addresses to new ones when renaming resources or moving them into modules, verify with `terraform plan` that no destroy/create occurs, and apply. Use `removed` blocks to stop managing resources without destroying them.
+
+```hcl
+moved {
+  from = aws_s3_bucket.logs
+  to   = module.logging.aws_s3_bucket.this
+}
+moved {
+  from = aws_instance.web[0]
+  to   = aws_instance.web["primary"]      # count → for_each
+}
+```
+```bash
+terraform plan    # "has moved to …" and 0 to destroy
+```
 
 # Scenario Questions
 
@@ -435,10 +695,35 @@ Use `moved` blocks (or `terraform state mv`) to map old addresses to new ones wh
 ### Two engineers ran `terraform apply` at the same time and the state got corrupted. How do you prevent this?
 Use a **remote backend with state locking**: S3 with native lockfile support (`use_lockfile = true`) or a DynamoDB table, the Azure Storage backend (blob lease) or GCS. Better still, run applies only through CI (Terraform Cloud, Atlantis, GitHub Actions) so humans don't apply from laptops. Turn on versioning on the state bucket for recovery.
 
+```bash Recover
+aws s3api list-object-versions --bucket acme-tf-state --prefix shop/prod/terraform.tfstate
+aws s3api get-object --bucket acme-tf-state --key shop/prod/terraform.tfstate --version-id <good> good.tfstate
+terraform state push good.tfstate
+```
+```hcl Prevent
+resource "aws_s3_bucket_versioning" "state" {
+  bucket = "acme-tf-state"
+  versioning_configuration { status = "Enabled" }
+}
+# backend "s3" { … use_lockfile = true }  + only CI applies to prod
+```
+
 ## Intermediate
 
 ### Someone changed a security group manually in the console. What happens on the next `terraform plan`, and how do you handle drift?
 The plan shows the difference and offers to **revert** the change to match the code. Decide whether the manual change is wanted. If it is, add it to the code. If not, apply to revert it. Detect drift with scheduled `plan -detailed-exitcode` runs, and restrict console write access.
+
+```text
+  ~ resource "aws_security_group" "web" {
+      ~ ingress = [
+          - { from_port = 22, to_port = 22, cidr_blocks = ["0.0.0.0/0"] },   # manual change → will be removed
+        ]
+    }
+```
+```bash
+terraform apply                       # revert to code (if the change was wrong)
+# or codify the rule in .tf and plan again until "No changes"
+```
 
 ### You need to rename a resource in code without destroying and recreating it.
 Use a **`moved` block** (Terraform 1.1+), or `terraform state mv`:
@@ -460,6 +745,14 @@ To bring existing, unmanaged resources under Terraform, use `import` blocks (1.5
 - Least-privilege, per-environment roles assumed via OIDC.
 - Outputs or remote state data sources only for clearly defined interfaces.
 
+```text
+platform/ (platform team)            services/ (each team owns its folder)
+  network/{dev,stg,prod}              orders/{dev,stg,prod}/main.tf → module "service" v3.2.0
+  eks/{dev,stg,prod}                  payments/{dev,stg,prod}/main.tf
+CODEOWNERS: /services/orders/ @acme/orders-team
+CI: plan on PR (per changed folder) → apply on merge, prod requires approval
+```
+
 # Tricky Questions
 
 ## Beginner
@@ -467,10 +760,35 @@ To bring existing, unmanaged resources under Terraform, use `import` blocks (1.5
 ### What happens if you change the `name` of an S3 bucket in Terraform?
 The plan shows **destroy and recreate** (`-/+`), because the bucket name is a ForceNew attribute. The old bucket's data would be lost, or the destroy fails if the bucket isn't empty. Read the plan carefully, and use `lifecycle { prevent_destroy = true }` on critical resources.
 
+```hcl
+resource "aws_s3_bucket" "data" {
+  bucket = "acme-data-v2"            # was "acme-data" → plan: -/+ must be replaced
+  lifecycle { prevent_destroy = true }   # makes the plan fail instead of deleting data
+}
+```
+
 ## Intermediate
 
 ### `count` vs `for_each`: what goes wrong when you remove the middle item from a `count`-based list?
 `count` addresses resources by **index**, so removing item 1 of 3 shifts index 2 into slot 1, and Terraform destroys and recreates resources unnecessarily. `for_each` with a map or set keys resources by **stable string keys**, so only the removed one is destroyed.
 
+```text
+users = ["ana", "bob", "cy"] → ["ana", "cy"]
+count:     aws_iam_user.u[1] "bob" → "cy" (rename/replace), aws_iam_user.u[2] destroyed
+for_each:  aws_iam_user.u["bob"] destroyed — nothing else touched
+```
+
 ### Are secrets safe because you marked the variable `sensitive = true`?
 Only partly. `sensitive` hides the value in CLI output, but it's still stored **in plain text in the state file**. Protect state with encryption and access controls, or use ephemeral resources and write-only attributes (Terraform 1.10+/1.11+), or fetch secrets at runtime from a vault.
+
+```bash
+terraform state pull | jq '.resources[] | select(.type=="aws_db_instance") | .instances[0].attributes.password'
+# "SuperSecret123"  ← plain text in state
+```
+```hcl
+variable "db_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true      # Terraform 1.10+: not persisted to state/plan
+}
+```

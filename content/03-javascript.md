@@ -583,70 +583,322 @@ typeof NaN;                 // 'number'
 ### What are the differences between `var`, `let` and `const`?
 `var` is function-scoped, hoisted and initialised to `undefined`, and can be redeclared. `let`/`const` are block-scoped, hoisted but inaccessible before declaration (Temporal Dead Zone), and cannot be redeclared. `const` cannot be reassigned, though the object it refers to can still be mutated.
 
+```js
+function demo() {
+  if (true) { var a = 1; let b = 2; const c = 3; }
+  console.log(a);        // 1 — var is function-scoped
+  // console.log(b);     // ReferenceError — block-scoped
+}
+const user = { name: 'Ada' };
+user.name = 'Grace';     // ✅ const prevents reassignment, not mutation
+// user = {};            // ❌ TypeError
+for (var i = 0; i < 3; i++) setTimeout(() => console.log(i)); // 3 3 3
+for (let j = 0; j < 3; j++) setTimeout(() => console.log(j)); // 0 1 2
+```
+
 ### What is the difference between `==` and `===`?
 `===` is strict equality: no type conversion, so types must match. `==` performs type coercion before comparing (`'1' == 1` is true). Prefer `===` to avoid surprises; `x == null` is the common exception (matches null and undefined).
+
+```js
+'1' == 1;            // true  (string → number)
+'1' === 1;           // false
+0 == '';             // true
+null == undefined;   // true  — the one useful == case:
+if (value == null) { /* null OR undefined */ }
+[] == false;         // true  ([] → '' → 0)
+NaN === NaN;         // false → use Number.isNaN(x)
+```
 
 ### What are the primitive types in JavaScript?
 `string`, `number`, `bigint`, `boolean`, `undefined`, `null`, `symbol`. Primitives are immutable and compared by value; everything else is an object compared by reference.
 
+```js
+typeof 'hi';        // 'string'
+typeof 42;          // 'number'
+typeof 10n;         // 'bigint'
+typeof true;        // 'boolean'
+typeof undefined;   // 'undefined'
+typeof Symbol('id');// 'symbol'
+typeof null;        // 'object' (legacy bug)
+let s = 'abc'; s[0] = 'z'; console.log(s); // 'abc' — primitives are immutable
+({}) === ({});      // false — objects compare by reference
+```
+
 ### What is the difference between `null` and `undefined`?
 `undefined` means a variable has been declared but not assigned (or a property/argument doesn't exist). `null` is an intentional "no value" assigned by the developer. `typeof null` is `'object'` due to a legacy bug.
+
+```js
+let x;                 console.log(x);            // undefined (not assigned)
+const o = {};          console.log(o.missing);    // undefined
+function f(a) { return a; }  f();                 // undefined
+let selected = null;   // explicit "nothing selected"
+JSON.stringify({ a: undefined, b: null });        // '{"b":null}'
+const port = config.port ?? 3000;                 // ?? only falls back for null/undefined
+```
 
 ### What are truthy and falsy values?
 Falsy values: `false`, `0`, `-0`, `0n`, `''`, `null`, `undefined`, `NaN`. Everything else is truthy — including `'0'`, `[]` and `{}`.
 
+```js
+const falsy = [false, 0, -0, 0n, '', null, undefined, NaN];
+falsy.every((v) => !v);           // true
+Boolean('0'); Boolean([]); Boolean({}); // true true true
+
+const count = 0;
+console.log(count || 10);  // 10  — 0 is falsy (often a bug)
+console.log(count ?? 10);  // 0   — ?? keeps 0 and ''
+```
+
 ### Explain arrow functions vs regular functions.
 Arrow functions have a concise syntax, no own `this` (they capture it lexically), no `arguments`, no `prototype`, and can't be used with `new`. Use them for callbacks; use regular functions/methods when you need dynamic `this` or a constructor.
+
+```js
+const timer = {
+  seconds: 0,
+  start() {
+    setInterval(() => this.seconds++, 1000);          // ✅ arrow captures `this`
+    // setInterval(function () { this.seconds++ });   // ❌ `this` is undefined/global
+  },
+};
+const add = (a, b) => a + b;              // implicit return
+const toObj = (id) => ({ id });           // wrap object literals in ()
+function legacy() { return arguments.length; } // arrows have no `arguments`
+// new add();                             // TypeError: not a constructor
+```
 
 ### What is event bubbling and event delegation?
 Events fire on the target and then propagate up through its ancestors (bubbling). Delegation exploits this: attach one listener to a common parent and use `event.target.closest()` to identify the child. It reduces listeners and handles dynamically added elements.
 
+```js
+// One listener handles all current AND future <li> elements
+document.querySelector('#todo-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('button.delete');
+  if (!btn) return;
+  btn.closest('li').remove();
+});
+child.addEventListener('click', (e) => e.stopPropagation()); // stop bubbling
+parent.addEventListener('click', handler, { capture: true }); // capture phase
+```
+
 ### `map` vs `forEach`?
 `map` returns a new array of transformed values and is chainable. `forEach` returns `undefined` and is used for side effects. Neither can be stopped early (use `for...of`, `some`, or `find` for that).
+
+```js
+const prices = [10, 20, 30];
+const withTax = prices.map((p) => p * 1.2);    // [12, 24, 36]
+const r = prices.forEach((p) => console.log(p)); // r === undefined
+for (const p of prices) { if (p > 15) break; }   // need early exit? use for...of
+prices.some((p) => p > 15);                      // or some/find
+```
 
 ### What is the spread operator vs rest parameters?
 Same `...` syntax, opposite roles. Spread **expands** an iterable/object into elements (`[...a, ...b]`, `{...obj}`, `fn(...args)`). Rest **collects** remaining items into an array/object (`function f(...args)`, `const {a, ...others} = obj`).
 
+```js
+const a = [1, 2], b = [3];
+const all = [...a, ...b];                  // spread → [1, 2, 3]
+const merged = { ...defaults, ...opts };   // later keys win
+Math.max(...all);                          // spread into args
+
+function sum(first, ...rest) {             // rest → array
+  return rest.reduce((s, n) => s + n, first);
+}
+const { password, ...safeUser } = user;    // rest in destructuring
+```
+
 ### How do you deep copy an object?
 `structuredClone(obj)` handles nested objects, arrays, Maps, Sets, Dates and cycles (not functions or DOM nodes). `JSON.parse(JSON.stringify(obj))` loses `undefined`, functions, Dates (become strings), and fails on cycles. Spread/`Object.assign` are shallow.
+
+```js
+const original = { date: new Date(), tags: new Set(['a']), nested: { n: 1 } };
+const copy = structuredClone(original);
+copy.nested.n = 2;  console.log(original.nested.n); // 1
+
+const shallow = { ...original };  shallow.nested.n = 99; // ❌ mutates original.nested
+JSON.parse(JSON.stringify(original)).date;  // string, Set → {} — lossy
+```
 
 ## Intermediate
 
 ### What is a closure? Give a practical example.
 A function that retains access to variables from its lexical scope after that scope has finished executing. Examples: private state in a counter factory, `debounce` keeping a timer id, memoization caches, React hooks capturing props/state. Watch out for stale closures and accidental memory retention.
 
+```js
+function createCounter() {
+  let count = 0;                       // private
+  return { inc: () => ++count, get: () => count };
+}
+const c = createCounter(); c.inc(); c.inc(); c.get(); // 2
+
+function debounce(fn, ms) {
+  let id;                              // remembered between calls
+  return (...args) => { clearTimeout(id); id = setTimeout(() => fn(...args), ms); };
+}
+```
+
 ### Explain hoisting.
 Before code runs, declarations are registered in their scope. Function declarations are fully hoisted (callable before definition). `var` is hoisted and initialised to `undefined`. `let`, `const` and `class` are hoisted but remain in the Temporal Dead Zone until their declaration line executes.
+
+```js
+greet();                         // ✅ "hi" — function declarations are fully hoisted
+function greet() { console.log('hi'); }
+
+console.log(v);                  // undefined — var hoisted & initialised
+var v = 1;
+
+console.log(l);                  // ❌ ReferenceError (TDZ)
+let l = 1;
+
+sayBye();                        // ❌ TypeError: sayBye is not a function
+var sayBye = () => console.log('bye');
+```
 
 ### How does `this` work?
 Determined at call time: `new` binds to the new object; `call/apply/bind` bind explicitly; `obj.method()` binds to `obj`; a plain call gets `undefined` (strict) or the global object. Arrow functions don't have their own `this` — they use the surrounding scope's.
 
+```js
+const user = { name: 'Ada', hi() { return this.name; } };
+user.hi();                 // 'Ada'      — method call
+const fn = user.hi; fn();  // undefined  — plain call loses `this`
+fn.call({ name: 'Bob' });  // 'Bob'      — explicit
+const bound = user.hi.bind(user); bound(); // 'Ada'
+function Person(n) { this.n = n; } new Person('Z'); // `this` = new object
+const arrow = { name: 'X', f: () => this }; // arrow: lexical this (module/global)
+```
+
 ### Explain the event loop.
 JS executes synchronous code on a single call stack. Async operations are handled by the environment, which queues callbacks. When the stack is empty, the loop drains all **microtasks** (promise reactions, queueMicrotask), optionally renders, then runs one **macrotask** (timers, I/O, events), and repeats. That's why promise callbacks run before `setTimeout(…, 0)`.
+
+```js
+console.log('1 sync');
+setTimeout(() => console.log('4 macrotask'), 0);
+Promise.resolve().then(() => console.log('3 microtask'));
+console.log('2 sync');
+// 1 sync → 2 sync → 3 microtask → 4 macrotask
+```
 
 ### What is the difference between microtasks and macrotasks?
 Microtasks (promise `.then`, `await` continuations, `queueMicrotask`, MutationObserver) run immediately after the current script, and the entire queue is drained before anything else — including rendering. Macrotasks (setTimeout, setInterval, I/O, UI events) run one per loop iteration.
 
+```js
+setTimeout(() => console.log('timeout'));
+queueMicrotask(() => {
+  console.log('micro 1');
+  Promise.resolve().then(() => console.log('micro 2')); // still before timeout
+});
+(async () => { await null; console.log('await continuation'); })();
+// micro 1, await continuation, micro 2, timeout
+```
+
 ### What is prototypal inheritance?
 Objects inherit directly from other objects via an internal `[[Prototype]]` link. Property access walks up the chain. Classes are syntactic sugar: methods are placed on `Constructor.prototype`, and `extends` links the prototypes.
+
+```js
+const animal = { speak() { return `${this.name} makes a sound`; } };
+const dog = Object.create(animal);   // dog.[[Prototype]] = animal
+dog.name = 'Rex';
+dog.speak();                          // found on the prototype
+
+class Cat { meow() {} }
+Object.getPrototypeOf(new Cat()) === Cat.prototype; // true — classes are sugar
+dog.hasOwnProperty('speak');          // false
+```
 
 ### `call`, `apply` and `bind`?
 All set `this`. `call(thisArg, a, b)` invokes immediately with individual args; `apply(thisArg, [a, b])` invokes with an array; `bind(thisArg, a)` returns a new function with `this` (and optionally args) permanently bound.
 
+```js
+function intro(greeting, punct) { return `${greeting}, I'm ${this.name}${punct}`; }
+const ada = { name: 'Ada' };
+intro.call(ada, 'Hi', '!');       // individual args
+intro.apply(ada, ['Hi', '!']);    // array of args
+const hiAda = intro.bind(ada, 'Hi'); // new function, partially applied
+hiAda('?');                         // "Hi, I'm Ada?"
+```
+
 ### `Promise.all` vs `allSettled` vs `race` vs `any`?
 `all`: resolves with all values, rejects on the first rejection. `allSettled`: waits for all, never rejects, returns statuses. `race`: settles with the first promise to settle (either way). `any`: resolves with the first fulfilment, rejects only if all reject (`AggregateError`).
+
+```js
+const fast = new Promise((r) => setTimeout(() => r('fast'), 100));
+const slow = new Promise((r) => setTimeout(() => r('slow'), 500));
+const fail = Promise.reject(new Error('boom'));
+
+await Promise.all([fast, slow]);          // ['fast', 'slow']
+await Promise.all([fast, fail]);          // throws boom
+await Promise.allSettled([fast, fail]);   // [{status:'fulfilled',value:'fast'},{status:'rejected',reason}]
+await Promise.race([slow, fast]);         // 'fast'
+await Promise.any([fail, slow]);          // 'slow' (first success)
+const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+await Promise.race([fetch('/api'), timeout(3000)]);
+```
 
 ### How do you handle errors with async/await?
 Wrap awaits in `try/catch` (and `finally` for cleanup), or attach `.catch()` to the returned promise. Handle unhandled rejections globally (`unhandledrejection` event / `process.on('unhandledRejection')`). For parallel work, use `Promise.allSettled` when partial failure is acceptable.
 
+```js
+async function loadUser(id) {
+  const ctrl = new AbortController();
+  try {
+    const res = await fetch(`/api/users/${id}`, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`); // fetch doesn't throw on 4xx/5xx
+    return await res.json();
+  } catch (err) {
+    console.error('loadUser failed', err);
+    throw err;                   // rethrow or return a fallback
+  } finally {
+    spinner.hide();
+  }
+}
+window.addEventListener('unhandledrejection', (e) => report(e.reason));
+```
+
 ### What are ES modules and how do they differ from CommonJS?
 ESM uses static `import/export`, loads asynchronously, supports live bindings, top-level await and tree-shaking, and runs in strict mode. CommonJS uses `require`/`module.exports`, loads synchronously at runtime and exports a value copy. Node supports both (`"type": "module"` or `.mjs`).
+
+```js
+// ESM — math.mjs
+export let count = 0;
+export const inc = () => count++;
+// main.mjs
+import { count, inc } from './math.mjs';
+inc(); console.log(count);        // 1 — live binding
+const { default: lib } = await import('./lib.mjs'); // dynamic + top-level await
+
+// CommonJS — math.cjs
+let n = 0; module.exports = { n, inc: () => n++ };
+const m = require('./math.cjs'); m.inc(); console.log(m.n); // 0 — copied value
+```
 
 ### What is debouncing vs throttling?
 Debounce delays execution until events stop for N ms (search-as-you-type, resize end). Throttle guarantees execution at most once every N ms during continuous events (scroll, mousemove). Both limit expensive handlers.
 
+```js
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+function throttle(fn, ms) {
+  let last = 0;
+  return (...a) => { const now = Date.now(); if (now - last >= ms) { last = now; fn(...a); } };
+}
+searchInput.addEventListener('input', debounce((e) => search(e.target.value), 300));
+window.addEventListener('scroll', throttle(updateProgressBar, 100));
+```
+
 ### What are `Map` and `Set` and when are they better than objects/arrays?
 `Map` allows any key type, preserves insertion order, has `size`, and is optimised for frequent add/delete. `Set` stores unique values with O(1) `has`. Use them for lookups, deduplication (`[...new Set(arr)]`), and caches. `WeakMap`/`WeakSet` hold keys weakly for GC-friendly metadata.
+
+```js
+const visits = new Map();
+const el = document.body;
+visits.set(el, 1);                       // any key type, even objects
+visits.set('home', 3).size;              // 2
+for (const [k, v] of visits) {}          // insertion order
+
+const ids = [3, 1, 3, 2, 1];
+const unique = [...new Set(ids)];        // [3, 1, 2]
+const seen = new Set(); seen.has(3);     // O(1) membership vs array.includes O(n)
+```
 
 ## Advanced
 
@@ -674,26 +926,127 @@ Output: `start, a1, b, p, end, a2, then, timeout`. Synchronous code runs first (
 ### How does garbage collection work and what causes memory leaks?
 Engines use reachability: mark everything reachable from roots, sweep the rest (V8 adds generational collection and compaction). Leaks happen when unneeded objects stay reachable: global variables, uncleared intervals, listeners never removed, closures holding big data, detached DOM nodes, unbounded caches. Diagnose with heap snapshots in DevTools.
 
+```js
+// Leak 1: forgotten listener keeps `bigData` reachable
+function mount() {
+  const bigData = new Array(1e6).fill('x');
+  const onResize = () => console.log(bigData.length);
+  window.addEventListener('resize', onResize);
+  return () => window.removeEventListener('resize', onResize); // ✅ cleanup
+}
+// Leak 2: unbounded cache → use WeakMap so entries die with the key
+const meta = new WeakMap();
+meta.set(domNode, { clicks: 0 });
+// Leak 3: setInterval never cleared → clearInterval(id)
+```
+
 ### Write a polyfill for `Promise.all`.
 Create a new promise; track a results array and a counter. For each input, `Promise.resolve(item).then(value => { results[i] = value; if (++count === n) resolve(results); }, reject)`. Resolve immediately for an empty array. Preserve order by index, not completion order.
+
+```js
+function promiseAll(iterable) {
+  return new Promise((resolve, reject) => {
+    const items = Array.from(iterable);
+    const results = new Array(items.length);
+    let done = 0;
+    if (items.length === 0) return resolve(results);
+    items.forEach((item, i) => {
+      Promise.resolve(item).then((value) => {
+        results[i] = value;                 // keep input order
+        if (++done === items.length) resolve(results);
+      }, reject);                           // first rejection wins
+    });
+  });
+}
+```
 
 ### What is the Temporal Dead Zone?
 The period between entering a scope and the execution of a `let`/`const`/`class` declaration. The binding exists (hoisted) but accessing it throws a `ReferenceError`. It catches use-before-define bugs, and `typeof` is not safe within it.
 
+```js
+{
+  // TDZ for `x` starts here
+  console.log(typeof x);   // ❌ ReferenceError (even typeof!)
+  let x = 5;               // TDZ ends
+}
+function f(a = b, b = 1) {} f(); // ReferenceError: b used before init
+```
+
 ### What are generators and where are they useful?
 Functions (`function*`) that can pause with `yield` and resume via `next()`, returning an iterator. Use cases: lazy/infinite sequences, custom iterables, cooperative scheduling, and historically async flow control (redux-saga, co). Async generators (`async function*`) model streams consumed with `for await`.
+
+```js
+function* ids() { let i = 1; while (true) yield i++; }
+const gen = ids();
+gen.next().value; gen.next().value;   // 1, 2 — lazy, infinite
+
+function* take(iter, n) { for (const x of iter) { if (n-- <= 0) return; yield x; } }
+[...take(ids(), 3)];                  // [1, 2, 3]
+
+async function* pages(url) {          // async generator for pagination
+  while (url) { const r = await (await fetch(url)).json(); yield r.items; url = r.next; }
+}
+for await (const items of pages('/api/orders')) render(items);
+```
 
 ### What is a Proxy and how is it used in frameworks?
 A wrapper object that intercepts operations (get, set, has, deleteProperty, apply…) via traps. Vue 3 and MobX use it for reactivity: `get` tracks dependencies, `set` triggers updates. Other uses: validation, logging, negative array indices, API clients.
 
+```js
+function reactive(target, onChange) {
+  return new Proxy(target, {
+    get(obj, key) { console.log('track', key); return Reflect.get(obj, key); },
+    set(obj, key, value) { Reflect.set(obj, key, value); onChange(key, value); return true; },
+  });
+}
+const state = reactive({ count: 0 }, (k, v) => render());
+state.count++;   // logs "track count", then re-renders
+```
+
 ### How do you prevent race conditions with fetch in UI code?
 Cancel previous requests with `AbortController` when a new one starts, or track a request id and ignore stale responses. In React, use a cleanup flag in `useEffect` or a data library (React Query/SWR) that handles this. Also debounce rapid inputs.
+
+```js
+let controller;
+async function search(q) {
+  controller?.abort();                       // cancel the previous request
+  controller = new AbortController();
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal });
+    render(await res.json());
+  } catch (e) {
+    if (e.name !== 'AbortError') throw e;
+  }
+}
+```
 
 ### Explain shallow vs deep equality and how React-like libraries use reference equality.
 Shallow equality compares top-level properties with `===`; deep equality recursively compares nested values. Frameworks use cheap reference checks (`Object.is`) to detect changes — so state must be updated immutably (new object/array) for changes to be noticed.
 
+```js
+const shallowEqual = (a, b) =>
+  Object.keys(a).length === Object.keys(b).length &&
+  Object.keys(a).every((k) => Object.is(a[k], b[k]));
+
+const s1 = { user: { name: 'A' } };
+const s2 = { ...s1 };
+shallowEqual(s1, s2);          // true  — same nested reference
+s2.user.name = 'B';            // ❌ mutation: React won't see a change
+const s3 = { ...s1, user: { ...s1.user, name: 'B' } }; // ✅ new reference → re-render
+```
+
 ### What is the difference between `Object.freeze`, `Object.seal` and `Object.preventExtensions`?
 `preventExtensions`: no new properties. `seal`: no add/delete, but existing props are writable. `freeze`: no add/delete/modify — fully read-only. All are **shallow**; nested objects remain mutable unless frozen recursively.
+
+```js
+'use strict';
+const a = Object.preventExtensions({ x: 1 }); a.x = 2; delete a.x; // ok; a.y = 1 ❌
+const b = Object.seal({ x: 1 });   b.x = 2;      // ok; delete b.x ❌; b.y = 1 ❌
+const c = Object.freeze({ x: 1, nested: { y: 1 } });
+// c.x = 2 ❌ TypeError
+c.nested.y = 2;                    // ✅ freeze is shallow
+const deepFreeze = (o) => { Object.values(o).forEach((v) => typeof v === 'object' && v && deepFreeze(v)); return Object.freeze(o); };
+```
 
 # Scenario Questions
 
@@ -707,8 +1060,30 @@ Check where the listener is attached. The usual causes are:
 
 Confirm it in DevTools → Elements → **Event Listeners**, or with `getEventListeners(el)` in the Chrome console.
 
+```js
+// Bug: called on every render/route change
+function render() { btn.addEventListener('click', save); }
+
+// Fix 1: attach once, or remove first
+btn.removeEventListener('click', save); btn.addEventListener('click', save);
+// Fix 2: AbortController cleans up all listeners for a view
+const ac = new AbortController();
+btn.addEventListener('click', save, { signal: ac.signal });
+onUnmount(() => ac.abort());
+// DevTools: getEventListeners(btn) in the console lists attached handlers
+```
+
 ### A user types "10" and "5" into two inputs and your total shows "105". What happened and how do you fix it?
 `input.value` is always a string, so `+` concatenates. Convert explicitly, `Number(a) + Number(b)` or `parseFloat`, and check the result with `Number.isNaN` before you use it. For money, work in integer cents (or `Intl.NumberFormat` for display) so floating-point errors don't creep in.
+
+```js
+const a = document.querySelector('#a').value;  // "10"
+const b = document.querySelector('#b').value;  // "5"
+a + b;                                         // "105"
+const total = Number(a) + Number(b);           // 15
+if (Number.isNaN(total)) showError('Enter numbers');
+document.querySelector('#a').valueAsNumber;    // 10 for <input type="number">
+```
 
 ## Intermediate
 
@@ -738,6 +1113,18 @@ Take heap snapshots in DevTools → Memory: one snapshot, repeat the action (ope
 
 Fix it by adding teardown logic (AbortController `signal` on listeners, clearing timers), then check that the heap returns to its baseline.
 
+```js
+// Typical culprit found in a heap snapshot: a global cache that only grows
+const cache = new Map();
+export function getRow(id) {
+  if (!cache.has(id)) cache.set(id, fetchRow(id));
+  return cache.get(id);
+}
+// Fix: bound it (LRU) or key it weakly
+const MAX = 500;
+function setBounded(k, v) { cache.set(k, v); if (cache.size > MAX) cache.delete(cache.keys().next().value); }
+```
+
 ## Advanced
 
 ### You need to process a 200 MB CSV in the browser without freezing the UI. What's your approach?
@@ -747,6 +1134,23 @@ Fix it by adding teardown logic (AbortController `signal` on listeners, clearing
 - Batch results and render with virtualization.
 - If you have to stay on the main thread, chunk the work and yield with `scheduler.yield()` or `setTimeout`.
 
+```js worker.js
+self.onmessage = async ({ data: file }) => {
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '', rows = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    const lines = buf.split('\n'); buf = lines.pop();   // keep the partial line
+    rows += lines.length;
+    if (rows % 50000 < lines.length) self.postMessage({ progress: rows });
+  }
+  self.postMessage({ done: rows });
+};
+// main.js: new Worker('worker.js').postMessage(input.files[0]);
+```
+
 ### Users report that a page shows another user's data for a split second after logout and login. What could cause it?
 Usually it's cached state that survives the session change:
 - a module-level singleton or store (Redux, a query cache) that isn't reset on logout
@@ -755,6 +1159,17 @@ Usually it's cached state that survives the session change:
 
 Fixes: clear stores and query caches on logout, key caches by user id, abort in-flight requests, send `Cache-Control: no-store`/`private` on personal API responses, and make the service worker skip authenticated routes.
 
+```js
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  queryClient.clear();               // React Query / SWR cache
+  store.dispatch({ type: 'RESET' }); // root reducer returns initial state on RESET
+  sessionStorage.clear();
+  location.assign('/login');         // hard reload drops module-level singletons
+}
+// Server: Cache-Control: private, no-store on /api/me
+```
+
 # Tricky Questions
 
 ## Beginner
@@ -762,11 +1177,25 @@ Fixes: clear stores and query caches on logout, key caches by user id, abort in-
 ### What does this print? `console.log(typeof null, typeof NaN, typeof [], typeof function(){})`
 `object number object function`. `typeof null === 'object'` is a historical bug in the language. `NaN` is a number. Arrays are objects, so use `Array.isArray` to detect them. Functions are the only callable objects and get their own `"function"` result.
 
+```js
+console.log(typeof null, typeof NaN, typeof [], typeof function () {});
+// object number object function
+Array.isArray([]);      // true — the right array check
+value === null;         // the right null check
+```
+
 ### What is the output? `console.log(0.1 + 0.2 === 0.3, [] + [], [] + {}, 1 + '2' - 1)`
 - `false`: binary floating point gives `0.30000000000000004`. Compare with `Math.abs(a - b) < Number.EPSILON`.
 - `""`: both arrays convert to empty strings.
 - `"[object Object]"`: the object converts to that string.
 - `11`: `1 + '2'` is `'12'`, then `-` forces numeric conversion, so `12 - 1 = 11`.
+
+```js
+console.log(0.1 + 0.2 === 0.3, [] + [], [] + {}, 1 + '2' - 1);
+// false "" "[object Object]" 11
+Math.abs(0.1 + 0.2 - 0.3) < Number.EPSILON;  // true
+(0.1 * 10 + 0.2 * 10) / 10;                  // 0.3 — or work in integer cents
+```
 
 ### What does this print, and why?
 ```js
@@ -838,3 +1267,11 @@ console.log('end');
 
 ### Why does `[NaN].includes(NaN)` differ from `[NaN].indexOf(NaN)`, and what about `Object.is`?
 `[NaN].includes(NaN)` is `true` because `includes` uses **SameValueZero**. `[NaN].indexOf(NaN)` is `-1` because `indexOf` uses `===`, and `NaN !== NaN`. `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false` (SameValue). `===` gives the opposite answer for both pairs.
+
+```js
+[NaN].includes(NaN);   // true  (SameValueZero)
+[NaN].indexOf(NaN);    // -1    (===)
+Object.is(NaN, NaN);   // true
+Object.is(0, -0);      // false
+[-0].includes(0);      // true
+```

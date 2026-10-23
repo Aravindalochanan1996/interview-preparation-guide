@@ -468,72 +468,388 @@ class PostTests(TestCase):
 ### What is Django's MVT architecture?
 Model (data layer and ORM), View (business logic that receives a request and returns a response), Template (presentation). The URL dispatcher routes requests to views. It maps to MVC with Django's View acting as the controller and Template as the view.
 
+```python
+# models.py — Model
+class Article(models.Model):
+    title = models.CharField(max_length=200)
+    published = models.DateTimeField(auto_now_add=True)
+
+# views.py — View
+def article_list(request):
+    return render(request, "blog/list.html", {"articles": Article.objects.order_by("-published")})
+
+# urls.py — URL dispatcher
+urlpatterns = [path("articles/", article_list, name="article-list")]
+```
+```django blog/list.html — Template
+{% for a in articles %}<h2>{{ a.title }}</h2>{% empty %}<p>No articles.</p>{% endfor %}
+```
+
 ### What is the difference between a project and an app?
 A project is the entire configuration and collection of apps for a site (settings, root URLs, WSGI/ASGI). An app is a self-contained module providing a specific feature (blog, accounts) that can be reused across projects.
+
+```bash
+django-admin startproject shop .     # project: settings, root urls, wsgi/asgi
+python manage.py startapp orders     # app: models, views, admin for one domain
+python manage.py startapp payments
+```
+```python shop/settings.py
+INSTALLED_APPS = [
+    "django.contrib.admin", "django.contrib.auth", "django.contrib.contenttypes",
+    "orders", "payments",
+]
+```
 
 ### What are migrations?
 Version-controlled files describing changes to models, generated with `makemigrations` and applied with `migrate`. They keep the database schema in sync with models across environments and support data migrations with `RunPython`.
 
+```bash
+python manage.py makemigrations orders      # generate 0002_order_status.py from model changes
+python manage.py sqlmigrate orders 0002     # show the SQL it will run
+python manage.py migrate                    # apply
+python manage.py showmigrations
+```
+```python orders/migrations/0003_backfill.py — data migration
+def backfill(apps, schema_editor):
+    Order = apps.get_model("orders", "Order")
+    Order.objects.filter(status="").update(status="pending")
+
+class Migration(migrations.Migration):
+    dependencies = [("orders", "0002_order_status")]
+    operations = [migrations.RunPython(backfill, migrations.RunPython.noop)]
+```
+
 ### `null=True` vs `blank=True`?
 `null=True` allows NULL in the database column. `blank=True` allows the field to be empty in form/model validation. For string fields, Django convention is `blank=True` without `null=True` (store empty strings).
+
+```python
+class Profile(models.Model):
+    bio = models.TextField(blank=True)                         # '' when empty (no NULL for strings)
+    birthday = models.DateField(null=True, blank=True)        # NULL in DB + optional in forms
+    manager = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL)
+```
 
 ### What is the Django admin?
 An automatically generated, customizable CRUD interface for registered models, with authentication, permissions, filtering, search and inline editing. Great for internal tools; not meant as the public-facing UI.
 
+```python orders/admin.py
+@admin.register(Order)
+class OrderAdmin(admin.ModelAdmin):
+    list_display = ("id", "customer", "status", "total", "created")
+    list_filter = ("status", "created")
+    search_fields = ("customer__email", "id")
+    list_select_related = ("customer",)
+    inlines = [OrderItemInline]
+    actions = ["mark_shipped"]
+
+    @admin.action(description="Mark selected as shipped")
+    def mark_shipped(self, request, queryset):
+        queryset.update(status="shipped")
+```
+
 ### How does Django protect against CSRF?
 `CsrfViewMiddleware` requires a secret token on unsafe requests (POST, PUT, DELETE). Templates include it with `{% csrf_token %}`; AJAX sends it via the `X-CSRFToken` header. The token is checked against the CSRF cookie and the `Origin`/`Referer` header for HTTPS.
 
+```django
+<form method="post">{% csrf_token %}<button>Save</button></form>
+```
+```js AJAX
+const csrftoken = document.cookie.match(/csrftoken=([^;]+)/)?.[1];
+fetch('/api/orders/', { method: 'POST', headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+```
+```python
+CSRF_TRUSTED_ORIGINS = ["https://app.example.com"]
+@csrf_exempt   # only for webhooks verified another way (e.g. signature header)
+def stripe_webhook(request): ...
+```
+
 ### FBV vs CBV?
 Function-based views are simple, explicit Python functions — easy to read for custom logic. Class-based views encapsulate common patterns (list, detail, create) and are extended via inheritance and mixins, reducing repetition but adding indirection.
+
+```python
+# Function-based view
+@login_required
+def order_detail(request, pk):
+    order = get_object_or_404(Order, pk=pk, customer=request.user)
+    return render(request, "orders/detail.html", {"order": order})
+
+# Class-based view
+class OrderDetailView(LoginRequiredMixin, DetailView):
+    model = Order
+    template_name = "orders/detail.html"
+    def get_queryset(self):
+        return Order.objects.filter(customer=self.request.user)
+```
 
 ## Intermediate
 
 ### `select_related` vs `prefetch_related`?
 `select_related` follows ForeignKey/OneToOne relationships via SQL JOINs in a single query. `prefetch_related` handles ManyToMany and reverse ForeignKey relations by running a separate query per relation and joining in Python. Both solve the N+1 problem.
 
+```python
+# ForeignKey → one JOINed query
+orders = Order.objects.select_related("customer")
+for o in orders: o.customer.email        # no extra queries
+
+# Many-to-many / reverse FK → 2 queries joined in Python
+orders = Order.objects.prefetch_related("items__product")
+for o in orders: [i.product.name for i in o.items.all()]
+
+orders = Order.objects.prefetch_related(
+    Prefetch("items", queryset=OrderItem.objects.filter(qty__gt=1), to_attr="bulk_items"))
+```
+
 ### Are QuerySets lazy? What triggers evaluation?
 Yes. Creating and chaining querysets doesn't touch the database. They're evaluated when iterated, sliced with a step, pickled, or when `len()`, `list()`, `bool()`, `repr()` are called. Results are then cached on that queryset instance.
+
+```python
+qs = Order.objects.filter(status="paid")        # no SQL yet
+qs = qs.exclude(total=0).order_by("-created")   # still no SQL
+for o in qs: ...                                # SQL runs here, results cached on qs
+len(qs); list(qs); bool(qs); qs[0]              # evaluation triggers
+qs.exists(); qs.count()                         # cheaper dedicated queries
+print(qs.query)                                 # inspect the SQL
+```
 
 ### What are F and Q objects?
 `F()` references a field's value in the database, enabling atomic updates (`stock=F('stock')-1`) and field comparisons without loading data into Python. `Q()` encapsulates conditions that can be combined with `|`, `&` and `~` for complex queries.
 
+```python
+from django.db.models import F, Q
+
+Product.objects.filter(pk=pid).update(stock=F("stock") - 1)        # atomic, no race
+Order.objects.filter(shipped_at__gt=F("created") + timedelta(days=3))  # compare fields
+
+Order.objects.filter(Q(status="paid") | Q(status="refunded"), ~Q(total=0))
+query = Q()
+if term: query &= Q(title__icontains=term)
+if tag:  query &= Q(tags__name=tag)
+Article.objects.filter(query)
+```
+
 ### What is middleware in Django?
 A layer of hooks processing every request/response globally — e.g., sessions, authentication, CSRF, security headers, logging. Defined as callables in the `MIDDLEWARE` list; requests pass top-to-bottom, responses bottom-to-top.
+
+```python
+import time, logging
+log = logging.getLogger(__name__)
+
+class TimingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+    def __call__(self, request):
+        start = time.perf_counter()
+        response = self.get_response(request)        # call the next layer / view
+        response["X-Response-Time"] = f"{(time.perf_counter() - start) * 1000:.1f}ms"
+        return response
+
+MIDDLEWARE = ["django.middleware.security.SecurityMiddleware", "...", "core.middleware.TimingMiddleware"]
+```
 
 ### What are signals and their drawbacks?
 A dispatcher that lets decoupled components react to events (e.g., `post_save`). Drawbacks: implicit control flow that's hard to trace and test, they don't fire for bulk operations or `update()`, and they run synchronously in the same transaction. Prefer explicit service calls for core logic.
 
+```python
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_profile(sender, instance, created, **kwargs):
+    if created:
+        Profile.objects.create(user=instance)
+
+# Drawback: hidden coupling, and bulk operations skip it:
+User.objects.bulk_create([User(username="a")])   # post_save NOT sent
+# Often clearer: an explicit service function → create_user() creates user + profile
+```
+
 ### Why define a custom user model at the start?
 Changing `AUTH_USER_MODEL` mid-project is painful because of foreign keys and migrations. Starting with a custom model (even identical to `AbstractUser`) lets you add fields or use email login later easily.
+
+```python accounts/models.py
+from django.contrib.auth.models import AbstractUser
+
+class User(AbstractUser):
+    email = models.EmailField(unique=True)
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["username"]
+```
+```python settings.py
+AUTH_USER_MODEL = "accounts.User"     # set BEFORE the first migrate
+# Elsewhere: models.ForeignKey(settings.AUTH_USER_MODEL, ...) and get_user_model()
+```
 
 ### What is a serializer in DRF?
 A class that converts complex data (model instances, querysets) to native Python types for JSON rendering and validates/deserializes incoming data back into objects. `ModelSerializer` generates fields and `create`/`update` from a model.
 
+```python
+class OrderSerializer(serializers.ModelSerializer):
+    customer_email = serializers.EmailField(source="customer.email", read_only=True)
+    class Meta:
+        model = Order
+        fields = ["id", "customer_email", "total", "status"]
+        read_only_fields = ["status"]
+    def validate_total(self, value):
+        if value <= 0: raise serializers.ValidationError("Total must be positive")
+        return value
+
+s = OrderSerializer(data=request.data)
+s.is_valid(raise_exception=True)
+order = s.save(customer=request.user)
+```
+
 ### How do you implement authentication in DRF?
 Configure `DEFAULT_AUTHENTICATION_CLASSES` — SessionAuthentication for browser clients, TokenAuthentication, or JWT via SimpleJWT for SPAs/mobile — and `DEFAULT_PERMISSION_CLASSES` like `IsAuthenticated`. Use custom permissions for object-level access.
+
+```python settings.py
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+}
+```
+```python
+urlpatterns += [path("api/token/", TokenObtainPairView.as_view()), path("api/token/refresh/", TokenRefreshView.as_view())]
+
+class IsOwner(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        return obj.owner_id == request.user.id
+```
 
 ## Advanced
 
 ### How do you optimise a slow Django endpoint?
 Profile with debug-toolbar/silk to count queries and find slow SQL. Fix N+1 with `select_related`/`prefetch_related`, add indexes, use `only`/`values`, paginate, cache results (Redis, `cache_page`), move heavy work to Celery, denormalise or use materialized views for expensive aggregates, and use read replicas.
 
+```python
+# Before: 1 + N + N queries, all columns
+orders = Order.objects.all()
+
+# After
+orders = (Order.objects
+          .select_related("customer")
+          .prefetch_related("items")
+          .only("id", "total", "customer__email")
+          .annotate(item_count=Count("items"))
+          .order_by("-created")[:50])
+
+class Meta:
+    indexes = [models.Index(fields=["customer", "-created"])]
+
+@method_decorator(cache_page(60), name="dispatch")
+class ProductList(ListAPIView): ...
+```
+
 ### How do you handle race conditions in Django?
 Use atomic DB-level updates with `F()` expressions, `select_for_update()` inside `transaction.atomic()` for pessimistic locking, unique constraints with `get_or_create`/`update_or_create` handling `IntegrityError`, optimistic locking via version fields, and distributed locks (Redis) for cross-service coordination.
+
+```python
+from django.db import transaction
+from django.db.models import F
+
+# Optimistic/atomic update
+updated = Product.objects.filter(pk=pid, stock__gte=1).update(stock=F("stock") - 1)
+if not updated: raise OutOfStock()
+
+# Pessimistic lock
+with transaction.atomic():
+    p = Product.objects.select_for_update().get(pk=pid)
+    if p.stock < 1: raise OutOfStock()
+    p.stock -= 1; p.save(update_fields=["stock"])
+
+# Uniqueness races
+obj, created = Subscription.objects.get_or_create(user=u, plan=plan)  # backed by a unique constraint
+```
 
 ### How does Django handle transactions?
 By default each query autocommits. `transaction.atomic` (decorator or context manager) wraps code in a transaction, with nested blocks creating savepoints. `ATOMIC_REQUESTS` wraps each request. `transaction.on_commit` registers callbacks executed only after a successful commit.
 
+```python
+from django.db import transaction
+
+@transaction.atomic
+def place_order(user, cart):
+    order = Order.objects.create(customer=user, total=cart.total)
+    try:
+        with transaction.atomic():                 # savepoint
+            reserve_stock(cart)
+    except OutOfStock:
+        order.status = "backorder"; order.save()
+    transaction.on_commit(lambda: send_confirmation.delay(order.id))  # only after COMMIT
+    return order
+```
+
 ### How do you scale a Django application?
 Stateless app servers behind a load balancer, sessions/cache in Redis, PostgreSQL with connection pooling and read replicas (DB routers), Celery for async work, CDN for static/media, caching at multiple layers, query optimisation, and horizontal scaling in containers/Kubernetes. Shard or split services only when needed.
+
+```python settings.py
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": "redis://redis:6379/1"}}
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+DATABASES = {
+    "default": {"ENGINE": "django.db.backends.postgresql", "HOST": "primary", "CONN_MAX_AGE": 60},
+    "replica": {"ENGINE": "django.db.backends.postgresql", "HOST": "replica"},
+}
+DATABASE_ROUTERS = ["core.routers.ReadReplicaRouter"]
+```
+```python core/routers.py
+class ReadReplicaRouter:
+    def db_for_read(self, model, **hints): return "replica"
+    def db_for_write(self, model, **hints): return "default"
+```
 
 ### What are the model inheritance types?
 Abstract base classes (no table, fields copied to children), multi-table inheritance (each class has its own table linked by one-to-one, causing joins), and proxy models (same table, different Python behaviour like managers or ordering).
 
+```python
+class TimeStamped(models.Model):           # abstract: no table, fields copied
+    created = models.DateTimeField(auto_now_add=True)
+    class Meta: abstract = True
+
+class Place(models.Model): name = models.CharField(max_length=50)
+class Restaurant(Place):                    # multi-table: own table + implicit OneToOne join
+    serves_pizza = models.BooleanField(default=False)
+
+class ActiveUser(User):                     # proxy: same table, different behaviour
+    class Meta: proxy = True
+    objects = ActiveUserManager()
+```
+
 ### How does Django support async and when should you use it?
 Django runs under ASGI with async views, middleware and async ORM APIs. Use async for high-concurrency I/O (calling external APIs, websockets with Channels, streaming). For typical CRUD with a sync DB driver, sync views with enough workers remain simpler; mixing requires `sync_to_async` boundaries.
 
+```python
+import httpx
+async def weather(request):
+    async with httpx.AsyncClient() as client:
+        a, b = await asyncio.gather(client.get(URL_A), client.get(URL_B))   # concurrent I/O
+    count = await Order.objects.filter(status="paid").acount()             # async ORM
+    return JsonResponse({"a": a.json(), "b": b.json(), "paid": count})
+# Run under ASGI: uvicorn shop.asgi:application
+# Calling sync code: from asgiref.sync import sync_to_async; await sync_to_async(legacy)()
+```
+
 ### Explain how you would structure a large Django codebase.
 Domain-focused apps, a custom user model, service and selector layers for business logic and queries, thin views/serializers, split settings, typed code with django-stubs, factories and pytest for tests, Celery tasks per domain, API versioning, and enforced boundaries between apps to avoid circular imports.
+
+```text
+config/settings/{base,dev,prod}.py
+apps/
+  orders/
+    models.py
+    services.py     # write operations: place_order(), cancel_order()
+    selectors.py    # read queries: orders_for_customer()
+    api/views.py    # thin: validate → call service → serialize
+    tests/
+```
+```python apps/orders/services.py
+@transaction.atomic
+def place_order(*, customer: User, items: list[CartItem]) -> Order:
+    order = Order.objects.create(customer=customer, total=sum(i.total for i in items))
+    OrderItem.objects.bulk_create([OrderItem(order=order, **i.as_dict()) for i in items])
+    return order
+```
 
 # Scenario Questions
 
@@ -542,16 +858,51 @@ Domain-focused apps, a custom user model, service and selector layers for busine
 ### A list page with 50 orders makes 101 SQL queries. How do you find and fix it?
 This is the **N+1 problem**: you loop over orders and touch `order.customer` and `order.items`. Find it with django-debug-toolbar, or `assertNumQueries` in tests. Fix it with `select_related('customer')` for FK/one-to-one (a JOIN) and `prefetch_related('items')` for reverse FK/M2M (a second query). In DRF, put these on the viewset's `get_queryset`.
 
+```python
+def test_order_list_query_count(client, django_assert_num_queries):
+    OrderFactory.create_batch(50)
+    with django_assert_num_queries(3):          # fails loudly if N+1 creeps back in
+        client.get("/orders/")
+
+# Fix in the view
+orders = Order.objects.select_related("customer").prefetch_related("items")
+```
+
 ## Intermediate
 
 ### Sending a welcome email in the signup view makes signup take 4 seconds. How do you fix it?
 Move the slow side effect into a **background task** (Celery or RQ with Redis, or Django 6's tasks framework). Use `transaction.on_commit(lambda: send_welcome.delay(user.id))` so the task only runs after the user row is committed. Pass ids, not model instances, and make the task retryable and idempotent.
+
+```python tasks.py
+@shared_task(bind=True, max_retries=5, default_retry_delay=30)
+def send_welcome(self, user_id):
+    try:
+        user = User.objects.get(pk=user_id)
+        send_mail("Welcome!", "…", None, [user.email])
+    except SMTPException as e:
+        raise self.retry(exc=e)
+```
+```python views.py
+with transaction.atomic():
+    user = form.save()
+    transaction.on_commit(lambda: send_welcome.delay(user.id))   # after the row is committed
+```
 
 ### Two users buy the last item in stock at the same moment and you oversell. How do you prevent it?
 It's a race condition between read and write. Options:
 - `select_for_update()` inside `transaction.atomic()` to lock the row
 - an atomic update `Product.objects.filter(id=pid, stock__gt=0).update(stock=F('stock') - 1)`, checking the number of affected rows
 - a DB constraint `CheckConstraint(stock__gte=0)` as a safety net
+
+```python
+def buy(product_id, qty=1):
+    rows = Product.objects.filter(pk=product_id, stock__gte=qty).update(stock=F("stock") - qty)
+    if rows == 0:
+        raise OutOfStock()
+# + a DB-level safety net
+class Meta:
+    constraints = [models.CheckConstraint(condition=Q(stock__gte=0), name="stock_non_negative")]
+```
 
 ## Advanced
 
@@ -564,6 +915,17 @@ Do it as an **expand–contract** migration:
 
 Avoid long locks, and use `SeparateDatabaseAndState` where needed.
 
+```python Step 1 — add nullable / db_default (no table rewrite)
+migrations.AddField("orders", "region", models.CharField(max_length=10, null=True))
+```
+```python Step 2 — backfill in batches (separate migration or management command)
+while ids := list(Order.objects.filter(region__isnull=True).values_list("id", flat=True)[:5000]):
+    Order.objects.filter(id__in=ids).update(region="EU")
+```
+```python Step 3 — enforce NOT NULL once every row is filled and the code writes the field
+migrations.AlterField("orders", "region", models.CharField(max_length=10, default="EU"))
+```
+
 # Tricky Questions
 
 ## Beginner
@@ -571,10 +933,35 @@ Avoid long locks, and use `SeparateDatabaseAndState` where needed.
 ### Does `Order.objects.filter(status='paid')` hit the database?
 **No.** QuerySets are **lazy**. The query runs when you evaluate it: iterate, `list()`, `len()`, slice with a step, `bool()`, or print it. Evaluated querysets cache their results, but `.filter()` on them builds a new, unevaluated queryset.
 
+```python
+qs = Order.objects.filter(status="paid")   # 0 queries
+paid = list(qs)                            # 1 query
+paid_again = list(qs)                      # 0 — result cache reused
+Order.objects.filter(status="paid").count()  # new queryset → new query
+```
+
 ## Intermediate
 
 ### Why didn't `post_save` fire for these rows? `Product.objects.filter(cat=1).update(price=10)`
 `QuerySet.update()` and `bulk_create`/`bulk_update` run SQL directly and **skip `save()` and signals**. If you rely on signals or overridden `save()` logic, loop and save (which is slower), or move the logic into an explicit service function.
 
+```python
+Product.objects.filter(cat=1).update(price=10)       # one UPDATE, no save(), no signals
+
+for p in Product.objects.filter(cat=1):              # fires post_save per row (N queries)
+    p.price = 10
+    p.save(update_fields=["price"])
+```
+
 ### What's wrong with `price = models.FloatField()` for money?
 Floats can't represent decimal fractions exactly (`0.1 + 0.2`), so totals drift. Use `DecimalField(max_digits=12, decimal_places=2)` or store integer cents.
+
+```python
+0.1 + 0.2                 # 0.30000000000000004
+from decimal import Decimal
+Decimal("0.1") + Decimal("0.2")   # Decimal('0.3')
+
+class Product(models.Model):
+    price = models.DecimalField(max_digits=12, decimal_places=2)
+    # or: price_cents = models.PositiveIntegerField()
+```

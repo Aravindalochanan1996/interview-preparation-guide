@@ -53,6 +53,7 @@ const LANG_ALIAS = {
   vue: 'xml', jsx: 'javascript', tsx: 'typescript', text: 'plaintext', toml: 'ini', sh: 'bash',
   dockerfile: 'bash', hcl: 'ini', bicep: 'typescript', kql: 'sql', vb: 'vbnet', http: 'plaintext',
   gherkin: 'plaintext', powershell: 'bash', cs: 'csharp',
+  promql: 'plaintext', logql: 'plaintext', jinja: 'xml', django: 'xml', nginx: 'plaintext', groovy: 'java', properties: 'ini',
 };
 
 const CALLOUTS = { TIP: 'Tip', NOTE: 'Note', WARN: 'Watch out', INTERVIEW: 'Interview angle', EXAMPLE: 'Example' };

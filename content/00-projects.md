@@ -15,6 +15,17 @@ summary: Hands-on capstones that join the tracks together — build, test, conta
 
 Reading lessons builds knowledge; **building projects builds skill** — and gives you stories for interviews ("Tell me about something you built").
 
+```bash Project skeleton you can reuse for every capstone
+mkdir my-project && cd my-project && git init
+mkdir -p src tests docs .github/workflows
+cat > README.md <<'MD'
+# My Project
+Problem · Architecture diagram · How to run · Tests · Trade-offs · What I'd do next
+MD
+git add . && git commit -m "chore: project skeleton"
+git switch -c feat/milestone-1     # one branch + PR per milestone
+```
+
 ### The project loop
 1. **Read the brief** and the architecture.
 2. **Build milestone by milestone** — each milestone links to the tracks you need. Commit after each one.
@@ -224,6 +235,21 @@ How you chose what to automate; your locator strategy; how you kept tests indepe
 **Goal**: an unattended bot that reads invoices from email, extracts data, validates it and enters it into a target system, with human review of uncertain cases.
 **Tracks**: RPA (UiPath or Power Automate) → Testing & QA.
 
+```python Validation step (the same rules you configure in UiPath / Power Automate)
+from decimal import Decimal
+
+def validate_invoice(inv: dict, po_lookup) -> tuple[bool, list[str]]:
+    errors = []
+    po = po_lookup(inv["po_number"])
+    if po is None:
+        errors.append("Unknown PO")
+    elif abs(Decimal(inv["total"]) - po.amount) > Decimal("0.01"):
+        errors.append(f"Total {inv['total']} != PO {po.amount}")
+    if inv.get("confidence", 1.0) < 0.85:
+        errors.append("Low OCR confidence → human review")
+    return (not errors, errors)
+```
+
 ### Milestones
 1. **PDD** — document the manual process: steps, rules (PO must exist, amount ≤ PO balance), exceptions, volumes.
 2. **Dispatcher** — read emails with attachments from a mailbox folder, save PDFs to a storage bucket, add one queue item per invoice (reference = invoice number to prevent duplicates).
@@ -280,6 +306,26 @@ How a request flows from DNS to pod; why readiness ≠ liveness; how you achieve
 **Goal**: provision a secure, highly available environment for the app on AWS (or Azure/GCP) entirely as code, with CI/CD for infrastructure and cost awareness.
 **Tracks**: AWS / Azure / GCP → Terraform → Linux → Git & CI/CD.
 
+```hcl main.tf (starting point)
+terraform {
+  backend "s3" {
+    bucket         = "acme-tf-state"
+    key            = "app/prod.tfstate"
+    region         = "eu-west-1"
+    dynamodb_table = "tf-locks"
+  }
+}
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  name    = "app-${var.env}"
+  cidr    = "10.0.0.0/16"
+  azs             = ["eu-west-1a", "eu-west-1b"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+  enable_nat_gateway = true
+}
+```
+
 ### Milestones (AWS flavour; map with the cross-cloud table in the GCP track)
 1. **Bootstrap** — remote state (S3 + locking), separate dev/prod directories, OIDC role for GitHub Actions.
 2. **Network module** — VPC across 2 AZs, public/private/data subnets, NAT Gateway, VPC endpoints for S3/ECR.
@@ -335,6 +381,21 @@ Chunking choices and how you validated them; why hybrid search; how you measure 
 **Goal**: implement and load-test the classic design, proving the trade-offs you talk about in system design interviews.
 **Tracks**: System Design → SQL & Databases (Redis) → Node.js/Java/Go → Docker/Kubernetes → Test Automation (k6).
 
+```js Core redirect path with a cache-aside lookup
+app.get('/:code', async (req, res) => {
+  const { code } = req.params;
+  let url = await redis.get(`url:${code}`);
+  if (!url) {
+    const row = await db.query('SELECT long_url FROM links WHERE code = $1', [code]);
+    if (!row.rowCount) return res.sendStatus(404);
+    url = row.rows[0].long_url;
+    await redis.set(`url:${code}`, url, { EX: 86400 });
+  }
+  kafka.send({ topic: 'clicks', messages: [{ key: code, value: JSON.stringify({ ts: Date.now() }) }] }); // async analytics
+  res.redirect(302, url);
+});
+```
+
 ### Milestones
 1. **Requirements & estimates** — write them down (100:1 read/write, p99 redirect < 50 ms).
 2. **ID generation** — base62 encoding of a Snowflake-style ID (timestamp + worker + sequence); custom aliases with uniqueness checks.
@@ -356,33 +417,127 @@ Concrete numbers: QPS achieved, p99 latency, cache hit ratio, what broke first u
 ### How should you present a personal project in an interview?
 Use a short structure: the problem and who it's for, the architecture (draw it), your key technical decisions and why, a challenge you hit and how you solved it, how you tested and deployed it, and what you'd improve. Keep it to two or three minutes, then let the interviewer dig in.
 
+```text One-slide answer template
+Problem   : Small clinics lose 20% of bookings to no-shows
+Stack     : React + Node/Express + PostgreSQL, Docker, GitHub Actions → AWS ECS
+Decision  : Chose Postgres over Mongo — bookings are relational and need transactions
+Challenge : Double-bookings under load → fixed with a unique (doctor_id, slot) constraint
+Result    : 300 users, p95 latency 120 ms, 85% test coverage
+Next      : SMS reminders via a queue worker
+```
+
 ### What makes a project portfolio strong for hiring managers?
 Working live demos, clean READMEs with screenshots and architecture diagrams, readable commits, tests and CI, sensible security (no secrets committed), and depth in a few projects rather than many unfinished ones. Projects aligned with the target role's stack carry the most weight.
 
+```markdown README.md structure that hiring managers skim
+# Clinic Booking  ![CI](https://github.com/me/clinic/actions/workflows/ci.yml/badge.svg)
+**Live demo:** https://clinic.example.dev · **Stack:** React, Node, Postgres, Docker
+## Architecture
+![diagram](docs/architecture.png)
+## Run locally
+    docker compose up
+## Testing
+    npm test        # unit + integration (Testcontainers)
+## Trade-offs & what I'd do next
+```
+
 ### How do you choose which project to build first?
 Start with something small you can finish in a week that uses your target stack's fundamentals (e.g., a portfolio site or a CRUD API), then increase scope: add authentication, a database, tests, Docker and deployment step by step.
+
+```text Scope ladder
+Week 1 : CRUD API (GET/POST/PUT/DELETE /todos) + tests
+Week 2 : + auth (JWT), validation, Postgres
+Week 3 : + React UI, Docker Compose
+Week 4 : + CI/CD pipeline, deploy, monitoring
+```
 
 ## Intermediate
 
 ### Walk me through how a request flows through your full-stack application.
 Describe it end to end: DNS resolves the domain, the browser loads the SPA from a CDN/nginx, the SPA calls the API over HTTPS with an access token, the API middleware validates the token and authorizes the user, the service layer queries PostgreSQL (with indexes) and maybe Redis, returns JSON, and the UI updates state — then mention logging, error handling and how you'd trace it.
 
+```text
+Browser ──DNS──▶ CDN (static SPA) 
+   │ fetch('/api/orders', { headers: { Authorization: 'Bearer <jwt>' } })
+   ▼
+Load balancer (TLS) ─▶ API pod: auth middleware → validation → service → repository
+                                                         │            │
+                                                      Redis cache   PostgreSQL
+   ◀── 200 JSON ────────────────────────────────────────┘
+```
+
 ### How did you test your project, and why that mix?
 Explain the pyramid: many unit tests for business logic, integration/API tests against a real database (Testcontainers) for endpoints and auth, and a handful of E2E tests for critical journeys, all run in CI. Justify it by speed, confidence and maintainability, and mention what you didn't automate.
 
+```js Integration test against a real database (Jest + Testcontainers)
+const { PostgreSqlContainer } = require('@testcontainers/postgresql');
+let pg;
+beforeAll(async () => { pg = await new PostgreSqlContainer().start(); process.env.DATABASE_URL = pg.getConnectionUri(); await migrate(); });
+afterAll(() => pg.stop());
+
+test('POST /orders persists the order', async () => {
+  const res = await request(app).post('/orders').send({ sku: 'A1', qty: 2 }).expect(201);
+  const { rows } = await db.query('SELECT qty FROM orders WHERE id=$1', [res.body.id]);
+  expect(rows[0].qty).toBe(2);
+});
+```
+
 ### What was the hardest bug in your project?
 Pick a real one, describe symptoms, how you investigated (logs, reproduction, narrowing down, tools), the root cause, the fix, and the test you added so it can't come back. Interviewers assess debugging method more than the bug itself.
+
+```js Example story: a race condition and the regression test that pins it
+// Bug: two concurrent requests both saw stock=1 and both sold the item.
+// Fix: make the check-and-decrement atomic in the database.
+await db.query(
+  'UPDATE products SET stock = stock - 1 WHERE id = $1 AND stock > 0 RETURNING stock', [id]
+);
+// Regression test
+test('cannot oversell', async () => {
+  const results = await Promise.all([buy(id), buy(id)]);
+  expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+});
+```
 
 ## Advanced
 
 ### How would you scale your project to 100× users?
 Identify the bottleneck with load tests and metrics first. Typical steps: stateless app instances behind a load balancer with autoscaling, a CDN for static assets, caching hot reads in Redis, read replicas and indexing for the database, queues for slow work, connection pooling, then partitioning or sharding only if data volume requires it — with observability and SLOs throughout.
 
+```yaml Horizontal scaling once the app is stateless (Kubernetes HPA)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+```
+
 ### How did you make your deployment reliable and secure?
 Multi-stage non-root images scanned in CI, secrets from a secret manager, least-privilege identities (OIDC for CI, roles for workloads), health probes, rolling or canary releases with automated rollback, network policies, TLS everywhere, backups with tested restores, and monitoring with alerts tied to user-facing SLOs.
 
+```yaml GitHub Actions deploy with OIDC (no long-lived cloud keys)
+permissions: { id-token: write, contents: read }
+steps:
+  - uses: actions/checkout@v4
+  - uses: aws-actions/configure-aws-credentials@v4
+    with: { role-to-assume: arn:aws:iam::123456789012:role/deploy, aws-region: eu-west-1 }
+  - run: docker build -t $IMAGE . && trivy image --exit-code 1 --severity CRITICAL $IMAGE
+  - run: aws ecs update-service --cluster prod --service api --force-new-deployment
+```
+
 ### If you rebuilt your project today, what would you change?
 Show reflection: choices that didn't scale or slowed you down (e.g., premature microservices, missing tests, weak data model), what you learned since, and concrete alternatives with trade-offs. This demonstrates growth and engineering judgement.
+
+```text Reflection template
+Then : 4 microservices for a 3-page app → slow local dev, distributed bugs
+Now  : modular monolith (modules: auth/, orders/, billing/) with clear interfaces
+Then : no tests on the payment flow  → Now: contract tests + E2E happy path
+Then : free-text status column        → Now: enum + DB check constraint
+```
 
 # Scenario Questions
 
@@ -398,6 +553,15 @@ Use a short **STAR** structure, technical edition:
 
 Have the repo and a live demo ready, and expect follow-ups on every technology you mention.
 
+```text 90-second script
+"I built ClinicBook so small clinics can cut no-shows.            (Situation)
+ React SPA, Node API, Postgres, deployed on ECS via GitHub Actions. (Architecture)
+ Hardest part: double bookings under load — I added a unique
+ constraint on (doctor_id, slot) and retry logic.                  (Challenge)
+ It now serves 300 users with p95 under 150 ms.                    (Result)
+ Next I'd move reminders to a queue."                              (Reflection)
+```
+
 ## Intermediate
 
 ### Your deployed full-stack project works locally but the live site shows a blank page and CORS errors. How do you debug it?
@@ -408,6 +572,17 @@ Open the browser console and network tab:
 - Is the reverse proxy serving `index.html` for client routes?
 
 Check the server logs and make sure env vars and secrets are set in the hosting platform.
+
+```js Typical fixes
+// 1. Frontend: API URL comes from the build-time env, not hard-coded localhost
+const API = import.meta.env.VITE_API_URL;          // set VITE_API_URL in the deploy pipeline
+
+// 2. Backend: allow the real production origin
+app.use(cors({ origin: ['https://app.example.com'], credentials: true }));
+
+// 3. SPA hosting: serve index.html for unknown routes (nginx)
+// location / { try_files $uri /index.html; }
+```
 
 ## Advanced
 
@@ -420,9 +595,30 @@ Work through the bottlenecks in order:
 
 Back each step with metrics: show dashboards, load-test results (k6) and the SLOs you'd watch.
 
+```js Pre-allocated ID ranges remove the single-counter bottleneck
+// Each app instance grabs a block of 10,000 IDs at a time
+async function nextId() {
+  if (!range || range.next > range.end) {
+    const end = await redis.incrBy('id:counter', 10000);
+    range = { next: end - 9999, end };
+  }
+  return toBase62(range.next++);
+}
+```
+
 # Tricky Questions
 
 ## Intermediate
 
 ### Your project's README says "uses microservices" for a 3-page app. Is that a strength in an interview?
 Usually not, unless you can justify it. Interviewers probe *why*. A well-structured **modular monolith** with clear boundaries, tests and CI/CD often impresses more. Be ready to explain the operational cost of microservices (network failures, distributed tracing, data consistency) and when you'd split a service out.
+
+```text Modular monolith layout you can defend
+src/
+  modules/
+    auth/      (routes, service, repo — exposes AuthService only)
+    orders/    (depends on auth via interface)
+    billing/
+  shared/      (db, logger, config)
+# Extract a module into a service only when it needs independent scaling or deploys
+```

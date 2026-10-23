@@ -29,12 +29,14 @@ Filter them by track, level and type, mark them as mastered, find them in search
 |---|---|
 | Learning Paths & Projects | End-to-End Projects (10 capstones: portfolio → full-stack + Docker → test framework → RPA bot → Kubernetes/OpenShift GitOps → Terraform cloud infra → RAG AI assistant → system design) |
 | Web Foundations | HTML, CSS, JavaScript, TypeScript, Web/HTTP & Security |
-| Frontend Frameworks | React, Angular, Vue.js |
-| Backend | Node.js & Express, Python, Django, FastAPI, SQL & Databases, Java & Spring Boot, C# & .NET |
-| DevOps & Cloud | Docker, Kubernetes, OpenShift, Git & CI/CD, Linux & Shell |
+| Frontend Frameworks | React, Redux & Redux Toolkit, Angular, NgRx (Redux for Angular), Vue.js |
+| Backend | Node.js & Express, Python, Django, Flask, FastAPI, SQL & Databases, Java & Spring Boot, C# & .NET |
+| Databases & Messaging | PostgreSQL, MongoDB, Redis, Apache Kafka |
+| DevOps & Cloud | Docker, Kubernetes, OpenShift, Git & CI/CD, CI/CD Pipelines (deep dive), Linux & Shell |
+| Observability | Kibana & the ELK Stack, Grafana & Prometheus |
 | Cloud Platforms | AWS, Azure, Google Cloud, Terraform & IaC |
-| Testing & Automation | Software Testing & QA, Test Automation & E2E (Playwright, Cypress, Selenium), RPA (UiPath, Power Automate, Automation Anywhere) |
-| Artificial Intelligence | AI & Machine Learning, Generative AI & LLMs |
+| Testing & Automation | Software Testing & QA, Test Automation & E2E (Playwright, Cypress, Selenium), Jest, Playwright, RPA (UiPath, Power Automate, Automation Anywhere) |
+| Artificial Intelligence | AI & Machine Learning, Generative AI & LLMs, Prompt Engineering Techniques |
 | Architecture | System Design, DSA for coding rounds |
 
 ## Run it
@@ -51,6 +53,7 @@ You can also open `index.html` directly in a browser after running `npm run buil
 
 - Sidebar per track with lessons grouped by level, prev/next navigation, reading time
 - "Mark complete" for lessons and "Mark as mastered" for questions — progress saved in your browser
+- A runnable code example in every lesson, interview answer, scenario and tricky question
 - Interview Q&A per track with level filters, text filter and expand-all
 - 🧩 Scenario & tricky questions across all tracks, with track, level and type filters
 - 🧭 Learning paths with ordered steps, progress and "next in path" navigation

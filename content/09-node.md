@@ -327,6 +327,19 @@ In containers/Kubernetes, prefer **one process per container** and scale horizon
 
 ## Performance, Memory and Profiling
 
+```bash
+node --max-old-space-size=3072 server.js          # keep below the container limit
+node --cpu-prof server.js                         # writes .cpuprofile → open in DevTools
+node --heapsnapshot-signal=SIGUSR2 server.js &    # kill -USR2 <pid> writes a heap snapshot
+npx clinic doctor -- node server.js               # event-loop / I/O diagnosis
+npx autocannon -c 100 -d 30 http://localhost:3000/api/orders
+```
+```js
+const { monitorEventLoopDelay } = require('node:perf_hooks');
+const h = monitorEventLoopDelay(); h.enable();
+setInterval(() => console.log('p99 loop delay ms', h.percentile(99) / 1e6, 'heap MB', process.memoryUsage().heapUsed / 1e6), 10_000);
+```
+
 ### V8 memory
 Heap = new space (short-lived, scavenged quickly) + old space (mark-sweep-compact). Default heap limit depends on system memory; set with `--max-old-space-size=4096`. Set it below the container memory limit.
 
@@ -415,75 +428,353 @@ logger.info({ requestId: ctx.getStore()?.requestId }, 'charging card');
 ### What is Node.js and why is it single-threaded?
 A JavaScript runtime built on V8 and libuv. JavaScript executes on one main thread with an event loop; I/O is delegated to the OS or libuv's thread pool and completes asynchronously. This avoids thread-per-request overhead and locking, making it efficient for many concurrent I/O-bound connections.
 
+```js
+const fs = require('node:fs');
+console.log('1 start');
+fs.readFile(__filename, () => console.log('3 file read (libuv did the I/O)'));
+console.log('2 main thread keeps going');
+// One JS thread, many concurrent I/O operations
+```
+
 ### What is npm and what is `package-lock.json` for?
 npm is Node's package manager and registry. `package.json` declares dependency ranges; `package-lock.json` records the exact resolved versions of the whole dependency tree so installs are reproducible. Commit it and use `npm ci` in CI.
+
+```json package.json
+{ "dependencies": { "express": "^4.19.2" }, "devDependencies": { "jest": "~29.7.0" } }
+```
+```bash
+npm ci            # installs EXACTLY what package-lock.json says (use in CI/Docker)
+npm install       # may update the lock within the ranges
+npm outdated && npm audit
+```
 
 ### What is middleware in Express?
 A function `(req, res, next)` in the request pipeline. It can read/modify the request and response, end the cycle, or pass control with `next()`. Examples: body parsing, logging, auth, CORS, rate limiting. Error middleware has four arguments `(err, req, res, next)`.
 
+```js
+const app = express();
+app.use(express.json({ limit: '1mb' }));                          // built-in
+app.use((req, res, next) => {                                     // custom logger
+  const start = Date.now();
+  res.on('finish', () => console.log(req.method, req.url, res.statusCode, Date.now() - start, 'ms'));
+  next();
+});
+const requireAuth = (req, res, next) => (req.user ? next() : res.sendStatus(401));
+app.get('/me', requireAuth, (req, res) => res.json(req.user));    // route-level
+app.use((err, req, res, next) => res.status(err.status ?? 500).json({ error: err.message })); // error handler last
+```
+
 ### `require` vs `import`?
 `require` is CommonJS: synchronous, dynamic, can be called anywhere, exports a value. `import` is ESM: static (analysable, tree-shakable), asynchronous loading, live bindings, supports top-level await. Dynamic `import()` works in both.
+
+```js CommonJS
+const path = require('node:path');
+if (process.env.DEBUG) require('./debug');      // conditional, synchronous
+module.exports = { add: (a, b) => a + b };
+```
+```js ESM ("type": "module" or .mjs)
+import path from 'node:path';
+import { add } from './math.js';                // extension required
+const { default: debug } = await import('./debug.js'); // dynamic import
+export const sub = (a, b) => a - b;
+```
 
 ### What is the difference between `process.nextTick()` and `setImmediate()`?
 `nextTick` callbacks run immediately after the current operation, before promise microtasks and before the event loop continues. `setImmediate` callbacks run in the check phase of the next loop iteration, after I/O polling. Recursive `nextTick` can starve I/O.
 
+```js
+setImmediate(() => console.log('setImmediate'));
+setTimeout(() => console.log('setTimeout'), 0);
+Promise.resolve().then(() => console.log('promise'));
+process.nextTick(() => console.log('nextTick'));
+// nextTick → promise → setTimeout/setImmediate (order of these two varies in the main module)
+```
+
 ### How do you handle errors in async/await Express routes?
 Wrap with try/catch and call `next(err)`, use a wrapper `asyncHandler`, or use Express 5 which forwards rejected promises automatically. Centralise responses in an error-handling middleware.
 
+```js
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+app.get('/orders/:id', asyncHandler(async (req, res) => {
+  const order = await Order.findById(req.params.id);
+  if (!order) throw Object.assign(new Error('Not found'), { status: 404 });
+  res.json(order);
+}));
+
+app.use((err, req, res, _next) => {
+  req.log?.error(err);
+  res.status(err.status ?? 500).json({ error: err.status ? err.message : 'Internal error' });
+});
+```
+
 ### What are environment variables used for in Node?
 Configuration that varies by environment (ports, DB URLs, API keys) accessed via `process.env`. Load locally with `--env-file` or dotenv, never commit secrets, and validate them at startup.
+
+```bash
+node --env-file=.env server.js     # Node 20.6+, no dotenv needed
+```
+```js config.js — validate once at startup
+const { z } = require('zod');
+const env = z.object({
+  PORT: z.coerce.number().default(3000),
+  DATABASE_URL: z.string().url(),
+  JWT_SECRET: z.string().min(32),
+}).parse(process.env);
+module.exports = env;
+```
 
 ## Intermediate
 
 ### Explain the Node.js event loop phases.
 Timers → pending callbacks → idle/prepare → poll (I/O) → check (`setImmediate`) → close callbacks. Between each callback, Node drains the `process.nextTick` queue then the promise microtask queue. The poll phase waits for I/O when nothing else is scheduled.
 
+```js
+const fs = require('node:fs');
+fs.readFile(__filename, () => {          // inside an I/O callback (poll phase)
+  setTimeout(() => console.log('timeout'), 0);
+  setImmediate(() => console.log('immediate'));  // check phase comes right after poll
+});
+// Always: immediate → timeout
+```
+
 ### What are streams and why use them?
 Abstractions for processing data incrementally — Readable, Writable, Duplex and Transform. They keep memory usage constant for large files/responses, start sending data sooner, and handle backpressure. Use `stream.pipeline` for safe composition and error handling.
+
+```js
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+await pipeline(
+  fs.createReadStream('access.log'),     // 10 GB file, constant memory
+  zlib.createGzip(),
+  fs.createWriteStream('access.log.gz'),
+);
+app.get('/export', (req, res) => db.queryStream('SELECT * FROM orders').pipe(toCsv()).pipe(res));
+```
 
 ### What is backpressure?
 When a consumer can't process data as fast as the producer generates it. Writable streams signal it by `write()` returning `false`; producers should pause until `drain`. Ignoring it causes unbounded memory growth. `pipeline()`/`pipe()` manage it automatically.
 
+```js
+function writeMany(ws, rows) {
+  let i = 0;
+  (function write() {
+    while (i < rows.length) {
+      if (!ws.write(rows[i++] + '\n')) {   // buffer full
+        ws.once('drain', write);           // resume when the consumer catches up
+        return;
+      }
+    }
+    ws.end();
+  })();
+}
+// stream.pipeline() / .pipe() handle backpressure for you
+```
+
 ### What runs on the libuv thread pool?
 File system operations, DNS lookups via `dns.lookup`, some crypto (`pbkdf2`, `scrypt`, `randomBytes`), and zlib compression. Default size 4, configurable with `UV_THREADPOOL_SIZE`. Network I/O uses the OS's non-blocking mechanisms instead.
+
+```js
+process.env.UV_THREADPOOL_SIZE = 8;  // must be set before the pool is first used
+const crypto = require('node:crypto');
+console.time('4 hashes');
+let done = 0;
+for (let i = 0; i < 4; i++) crypto.pbkdf2('pw', 'salt', 100000, 64, 'sha512', () => { if (++done === 4) console.timeEnd('4 hashes'); });
+// With the default pool of 4 these run in parallel; a 5th would wait
+```
 
 ### How do you secure an Express API?
 Helmet for headers, strict CORS, input validation (Zod/Joi), parameterised queries, auth with short-lived JWTs or sessions, role checks, rate limiting, body size limits, HTTPS, secrets in env/secret managers, dependency scanning, logging without sensitive data, and generic error messages in production.
 
+```js
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+app.use(helmet());
+app.use(cors({ origin: ['https://app.example.com'] }));
+app.use(express.json({ limit: '100kb' }));
+app.use('/api/', rateLimit({ windowMs: 60_000, limit: 100 }));
+app.post('/api/users', validate(UserSchema), requireRole('admin'), async (req, res) => {
+  await db.query('INSERT INTO users(email) VALUES ($1)', [req.body.email]); // parameterised
+  res.sendStatus(201);
+});
+app.disable('x-powered-by');
+```
+
 ### How do you implement JWT authentication with refresh tokens?
 On login, issue a short-lived access token (e.g., 15 min) and a long-lived refresh token (stored hashed in DB, sent as HttpOnly cookie). Middleware verifies the access token on each request. When it expires, the client calls `/refresh`; the server validates, rotates the refresh token and issues a new access token. Logout revokes the refresh token.
+
+```js
+app.post('/login', async (req, res) => {
+  const user = await verifyPassword(req.body.email, req.body.password);
+  if (!user) return res.sendStatus(401);
+  const access = jwt.sign({ sub: user.id, role: user.role }, ACCESS_SECRET, { expiresIn: '15m' });
+  const refresh = crypto.randomBytes(48).toString('base64url');
+  await db.refreshTokens.insert({ userId: user.id, hash: sha256(refresh), expiresAt: addDays(30) });
+  res.cookie('rt', refresh, { httpOnly: true, secure: true, sameSite: 'strict', path: '/auth/refresh' });
+  res.json({ access });
+});
+const auth = (req, res, next) => {
+  try { req.user = jwt.verify(req.headers.authorization?.split(' ')[1], ACCESS_SECRET); next(); }
+  catch { res.sendStatus(401); }
+};
+```
 
 ### Express vs NestJS vs Fastify?
 Express: minimal, flexible, huge ecosystem, slower, unstructured. Fastify: high performance, schema-based validation/serialization, plugin system. NestJS: opinionated architecture with modules, DI, decorators, guards and interceptors — great for large teams; can run on Express or Fastify.
 
+```js Fastify: schema-driven validation & serialization
+fastify.post('/users', {
+  schema: { body: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email' } } } },
+}, async (req) => ({ id: await createUser(req.body) }));
+```
+```ts NestJS: decorators + DI
+@Controller('users')
+export class UsersController {
+  constructor(private readonly users: UsersService) {}
+  @Post() create(@Body() dto: CreateUserDto) { return this.users.create(dto); }
+}
+```
+
 ### What is the N+1 query problem?
 Loading a list of N entities and then running one query per entity to load related data, giving N+1 queries. Fix with joins/eager loading (`include`), batching IN queries, or DataLoader.
+
+```js
+// ❌ 1 query for posts + N queries for authors
+const posts = await Post.findAll();
+for (const p of posts) p.author = await User.findByPk(p.authorId);
+
+// ✅ eager load (1 JOIN) or batch (2 queries)
+const posts2 = await Post.findAll({ include: [{ model: User, as: 'author' }] });
+const authors = await User.findAll({ where: { id: [...new Set(posts.map((p) => p.authorId))] } });
+// GraphQL: DataLoader batches per tick → new DataLoader((ids) => User.findAll({ where: { id: ids } }))
+```
 
 ## Advanced
 
 ### How do you handle CPU-intensive tasks in Node.js?
 Don't run them on the main thread. Use worker threads (with a pool like Piscina), offload to a job queue processed by separate workers, use native addons/WASM, or move the workload to a service better suited (Go, Python). Break long tasks into chunks with `setImmediate` as a last resort.
 
+```js
+const Piscina = require('piscina');
+const pool = new Piscina({ filename: require.resolve('./resize-worker.js') });
+app.post('/resize', async (req, res) => {
+  const out = await pool.run({ buffer: req.body, width: 800 }); // runs on a worker thread
+  res.type('image/webp').send(out);
+});
+```
+```js resize-worker.js
+const sharp = require('sharp');
+module.exports = ({ buffer, width }) => sharp(buffer).resize(width).webp().toBuffer();
+```
+
 ### Cluster module vs worker threads?
 Cluster forks multiple processes, each with its own event loop and memory, sharing a server port — used to scale HTTP handling across cores. Worker threads run in the same process with separate isolates and can share memory — used to offload CPU-bound computations. In Kubernetes, prefer scaling pods over cluster mode.
+
+```js cluster
+const cluster = require('node:cluster');
+if (cluster.isPrimary) {
+  for (let i = 0; i < require('node:os').availableParallelism(); i++) cluster.fork();
+  cluster.on('exit', () => cluster.fork());           // restart crashed workers
+} else {
+  require('./server');                                // each process listens on the same port
+}
+```
+```js worker_threads
+const { Worker } = require('node:worker_threads');
+const w = new Worker('./hash.js', { workerData: { input } });
+w.on('message', (hash) => console.log(hash));        // shares the process, can share memory
+```
 
 ### How would you find and fix a memory leak in production?
 Monitor heap/RSS metrics to confirm growth. Reproduce under load, take heap snapshots at intervals (`--inspect` or `--heapsnapshot-signal`) and compare retained objects and retainer paths. Common culprits: unbounded caches, event listeners, closures, global arrays, unclosed resources. Fix, add bounded caches/cleanup, and add memory alerts.
 
+```bash
+node --inspect=0.0.0.0:9229 server.js     # attach Chrome DevTools → Memory → Heap snapshot
+kill -USR2 $(pgrep -f server.js)          # with --heapsnapshot-signal=SIGUSR2
+```
+```js Common fix: bound the cache
+const { LRUCache } = require('lru-cache');
+const cache = new LRUCache({ max: 5000, ttl: 10 * 60_000 }); // instead of an ever-growing Map
+```
+
 ### How do you implement graceful shutdown?
 Listen for SIGTERM/SIGINT, mark readiness as failing, stop accepting new connections (`server.close`), let in-flight requests finish, close DB/Redis/queue connections, flush logs, then exit. Add a hard timeout. Align with Kubernetes `terminationGracePeriodSeconds` and a preStop delay.
+
+```js
+const server = app.listen(3000);
+let shuttingDown = false;
+app.get('/ready', (req, res) => res.sendStatus(shuttingDown ? 503 : 200));
+
+process.on('SIGTERM', async () => {
+  shuttingDown = true;                         // load balancer stops sending traffic
+  server.close(async () => {                   // finish in-flight requests
+    await Promise.allSettled([db.end(), redis.quit(), queue.close()]);
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 25_000).unref(); // hard deadline < terminationGracePeriod
+});
+```
 
 ### What is AsyncLocalStorage and when would you use it?
 A Node API that stores context bound to an asynchronous execution chain. It's used for request-scoped data like correlation ids, user info or DB transactions available deep in the call stack without passing arguments — e.g., for logging and tracing.
 
+```js
+const { AsyncLocalStorage } = require('node:async_hooks');
+const als = new AsyncLocalStorage();
+
+app.use((req, res, next) => als.run({ requestId: req.get('x-request-id') ?? crypto.randomUUID() }, next));
+
+function log(msg) {
+  console.log(JSON.stringify({ msg, requestId: als.getStore()?.requestId })); // no need to pass req around
+}
+app.get('/orders', async (req, res) => { log('loading orders'); res.json(await loadOrders()); });
+```
+
 ### How do you design a reliable background job system?
 Use a durable broker (Redis/BullMQ, RabbitMQ, SQS, Kafka). Make jobs idempotent, add retries with exponential backoff and jitter, dead-letter queues, timeouts, concurrency limits, priorities, scheduling, and monitoring dashboards. Use the outbox pattern when job creation must be atomic with a DB write.
+
+```js BullMQ
+const { Queue, Worker } = require('bullmq');
+const emails = new Queue('emails', { connection });
+await emails.add('welcome', { userId }, {
+  jobId: `welcome:${userId}`,                    // idempotent enqueue
+  attempts: 5, backoff: { type: 'exponential', delay: 2000 },
+  removeOnComplete: 1000,
+});
+new Worker('emails', async (job) => {
+  if (await alreadySent(job.data.userId)) return; // idempotent handler
+  await sendWelcome(job.data.userId);
+}, { connection, concurrency: 10 });
+```
 
 ### What is the difference between `spawn`, `exec` and `fork`?
 `spawn` starts a process with streamed stdio — good for large output. `exec` runs a command in a shell and buffers output — convenient but limited and shell-injection-prone. `fork` is a special `spawn` for Node scripts with an IPC channel for `process.send` messages.
 
+```js
+const { spawn, exec, execFile, fork } = require('node:child_process');
+spawn('ffmpeg', ['-i', 'in.mp4', 'out.webm']).stdout.pipe(process.stdout); // streamed
+exec('ls -la | wc -l', (err, stdout) => console.log(stdout));             // shell + buffered
+execFile('git', ['log', '--oneline', '-5'], (e, out) => console.log(out)); // no shell → safer with input
+const child = fork('./worker.js'); child.send({ task: 'report' });         // Node process + IPC
+child.on('message', (m) => console.log('done', m));
+```
+
 ### How would you scale a Node.js WebSocket server horizontally?
 Run multiple instances behind a load balancer with sticky sessions (or use a protocol that tolerates reconnection), share pub/sub messages through Redis/NATS (Socket.IO Redis adapter), keep connection state external, set heartbeats/timeouts, and scale on connection count/CPU metrics.
+
+```js Socket.IO with the Redis adapter
+const { createAdapter } = require('@socket.io/redis-adapter');
+const pub = createClient({ url: REDIS_URL }); const sub = pub.duplicate();
+await Promise.all([pub.connect(), sub.connect()]);
+io.adapter(createAdapter(pub, sub));
+
+io.on('connection', (socket) => {
+  socket.join(`room:${socket.handshake.query.room}`);
+  socket.on('msg', (m) => io.to(`room:${m.room}`).emit('msg', m)); // reaches clients on ALL instances
+});
+```
 
 # Scenario Questions
 
@@ -491,6 +782,19 @@ Run multiple instances behind a load balancer with sticky sessions (or use a pro
 
 ### Your Express API hangs forever on some requests: no response, no error. What do you look for?
 A code path that never calls `res.send`, `res.json` or `next()`. That might be a missing `return` after an `if`, a middleware that forgets `next()`, or an `async` handler whose rejection isn't caught (Express 4 doesn't catch async errors, so wrap handlers or upgrade to Express 5). Add request timeouts and log the route and duration.
+
+```js
+// ❌ missing return → falls through, or never responds
+app.get('/user/:id', async (req, res) => {
+  const user = await db.find(req.params.id);
+  if (!user) res.status(404);          // forgot .end() / return
+});
+// ❌ middleware forgets next()
+app.use((req, res, next) => { req.start = Date.now(); });
+
+// Safety net: time out every request
+app.use((req, res, next) => { res.setTimeout(10_000, () => res.status(503).end('timeout')); next(); });
+```
 
 ## Intermediate
 
@@ -502,6 +806,17 @@ The report does **CPU-heavy synchronous work** (large JSON processing, crypto, i
 
 Spot it with `clinic doctor`, `--prof`, or event-loop lag metrics (`perf_hooks.monitorEventLoopDelay`).
 
+```js
+// ❌ blocks the event loop for everyone
+app.get('/report', (req, res) => res.json(buildHugeReport(readFileSync('data.json'))));
+
+// ✅ move it off the main thread / out of the request
+app.post('/reports', async (req, res) => {
+  const job = await reportQueue.add('build', { userId: req.user.id });
+  res.status(202).json({ jobId: job.id, status: `/reports/${job.id}` });
+});
+```
+
 ### Memory grows steadily in production until the container is OOM-killed. How do you find the leak?
 Take heap snapshots (`--inspect` with Chrome DevTools, or `heapdump`) at intervals and compare retained objects. Typical leaks:
 - module-level caches or Maps with no eviction
@@ -511,10 +826,41 @@ Take heap snapshots (`--inspect` with Chrome DevTools, or `heapdump`) at interva
 
 Fix it with an LRU cache, by removing listeners, and with `--max-old-space-size` set to match container limits.
 
+```js Typical leak and fix
+// ❌ listener added per request, never removed
+app.get('/stream', (req, res) => { bus.on('event', (e) => res.write(e)); });
+
+// ✅ remove it when the client disconnects
+app.get('/stream', (req, res) => {
+  const onEvent = (e) => res.write(`data: ${e}\n\n`);
+  bus.on('event', onEvent);
+  req.on('close', () => bus.off('event', onEvent));
+});
+// Warning sign in logs: MaxListenersExceededWarning
+```
+
 ## Advanced
 
 ### You must process a 5 GB file upload and save it to S3 without running out of memory. How?
 **Stream** it end to end. Pipe the request stream (busboy) into the S3 multipart `Upload`, using `stream.pipeline` for error handling and **backpressure**, so memory stays constant. Don't buffer with `multer` memory storage. Validate size and type as the bytes flow, and support resumable uploads (presigned multipart URLs that go straight to S3) for big files.
+
+```js
+const Busboy = require('busboy');
+const { Upload } = require('@aws-sdk/lib-storage');
+
+app.post('/upload', (req, res) => {
+  const bb = Busboy({ headers: req.headers, limits: { fileSize: 6 * 1024 ** 3 } });
+  bb.on('file', async (name, file, info) => {
+    const upload = new Upload({
+      client: s3,
+      params: { Bucket: 'uploads', Key: `${crypto.randomUUID()}-${info.filename}`, Body: file },
+      partSize: 16 * 1024 * 1024, queueSize: 4,   // ~64 MB in memory max
+    });
+    try { await upload.done(); res.sendStatus(201); } catch (e) { res.status(500).end(e.message); }
+  });
+  req.pipe(bb);
+});
+```
 
 # Tricky Questions
 

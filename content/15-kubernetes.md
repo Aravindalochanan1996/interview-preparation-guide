@@ -437,75 +437,368 @@ Events → logs (current and previous) → describe (probes, resources, image) �
 ### What is Kubernetes?
 An open-source container orchestration platform that automates deployment, scaling, self-healing, networking and rolling updates of containerised applications across a cluster, using a declarative desired-state model reconciled by controllers.
 
+```bash
+kubectl create deployment web --image=nginx:1.27 --replicas=3
+kubectl expose deployment web --port=80
+kubectl scale deployment web --replicas=5
+kubectl delete pod -l app=web --wait=false   # self-healing: they come back
+kubectl set image deployment/web nginx=nginx:1.27.2   # rolling update
+```
+
 ### What is a Pod?
 The smallest deployable unit in Kubernetes — one or more tightly coupled containers sharing a network namespace (IP and ports) and storage volumes, scheduled together on the same node.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata: { name: web, labels: { app: web } }
+spec:
+  containers:
+    - name: app
+      image: myapp:1.0
+      ports: [{ containerPort: 8080 }]
+      volumeMounts: [{ name: logs, mountPath: /var/log/app }]
+    - name: log-shipper                 # sidecar: same IP, same volume
+      image: fluent/fluent-bit:3.1
+      volumeMounts: [{ name: logs, mountPath: /var/log/app }]
+  volumes: [{ name: logs, emptyDir: {} }]
+```
 
 ### Deployment vs ReplicaSet vs Pod?
 A Pod runs containers. A ReplicaSet ensures a specified number of identical Pods are running. A Deployment manages ReplicaSets to provide declarative updates, rolling deployments and rollbacks — you normally only create Deployments.
 
+```bash
+kubectl apply -f deployment.yaml
+kubectl get deploy,rs,pods -l app=api
+# deployment.apps/api        3/3
+# replicaset.apps/api-7c9d   3      ← created and owned by the Deployment
+# pod/api-7c9d-x2k           Running ← owned by the ReplicaSet
+kubectl rollout history deploy/api      # each revision = a ReplicaSet
+```
+
 ### What is a Service and why do we need it?
 A stable network endpoint (virtual IP + DNS name) that load-balances traffic to a set of Pods selected by labels. Pods are ephemeral with changing IPs; Services decouple consumers from them.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata: { name: api }
+spec:
+  selector: { app: api }        # targets pods with this label
+  ports: [{ port: 80, targetPort: 8080 }]
+# Other pods call http://api (same namespace) or http://api.shop.svc.cluster.local
+```
+```bash
+kubectl get endpoints api       # the pod IPs currently behind the Service
+```
 
 ### Explain the Kubernetes control plane components.
 kube-apiserver (API front end), etcd (state store), kube-scheduler (places Pods on nodes), kube-controller-manager (reconciliation loops) and cloud-controller-manager (cloud integrations). Nodes run kubelet, kube-proxy and a container runtime.
 
+```bash
+kubectl get pods -n kube-system
+# etcd-cp1, kube-apiserver-cp1, kube-scheduler-cp1, kube-controller-manager-cp1, coredns-…, kube-proxy-…
+kubectl get --raw='/readyz?verbose'        # API server health checks
+kubectl get events --sort-by=.lastTimestamp | grep Scheduled   # scheduler decisions
+```
+
 ### What is a namespace?
 A virtual partition of a cluster that scopes names and allows separate RBAC, resource quotas and network policies — commonly used per team, application or environment.
 
+```bash
+kubectl create namespace team-a
+kubectl -n team-a apply -f app.yaml
+kubectl config set-context --current --namespace=team-a
+```
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: quota, namespace: team-a }
+spec:
+  hard: { requests.cpu: "10", requests.memory: 20Gi, pods: "50" }
+```
+
 ### ClusterIP vs NodePort vs LoadBalancer?
 ClusterIP exposes a Service only inside the cluster. NodePort additionally opens a static port on every node. LoadBalancer additionally provisions an external cloud load balancer pointing at those node ports.
+
+```yaml
+spec: { type: ClusterIP,    selector: { app: api }, ports: [{ port: 80, targetPort: 8080 }] }  # internal only
+---
+spec: { type: NodePort,     selector: { app: api }, ports: [{ port: 80, targetPort: 8080, nodePort: 30080 }] } # <nodeIP>:30080
+---
+spec: { type: LoadBalancer, selector: { app: api }, ports: [{ port: 443, targetPort: 8080 }] } # cloud LB with external IP
+```
 
 ## Intermediate
 
 ### Liveness vs readiness vs startup probes?
 Liveness failures restart the container (recover from deadlocks). Readiness failures remove the Pod from Service endpoints without restarting (temporarily unable to serve). Startup probes hold off the others until a slow-starting app has booted.
 
+```yaml
+containers:
+  - name: api
+    image: api:1.4
+    startupProbe:   { httpGet: { path: /healthz, port: 8080 }, failureThreshold: 30, periodSeconds: 5 } # slow boot allowed
+    readinessProbe: { httpGet: { path: /ready,   port: 8080 }, periodSeconds: 5 }   # out of Service if failing
+    livenessProbe:  { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10, failureThreshold: 3 } # restart if stuck
+```
+
 ### ConfigMap vs Secret?
 Both inject configuration as env vars or files. ConfigMaps hold non-sensitive data; Secrets hold sensitive data, are base64-encoded, can be encrypted at rest and access-restricted. For real security combine with RBAC, etcd encryption and external secret managers.
+
+```bash
+kubectl create configmap app-config --from-literal=LOG_LEVEL=info --from-file=app.yaml
+kubectl create secret generic db --from-literal=password='s3cr3t'
+kubectl get secret db -o jsonpath='{.data.password}' | base64 -d   # base64 ≠ encryption
+```
+```yaml
+envFrom: [{ configMapRef: { name: app-config } }]
+env:
+  - name: DB_PASSWORD
+    valueFrom: { secretKeyRef: { name: db, key: password } }
+```
 
 ### What are requests and limits?
 Requests are the guaranteed resources used by the scheduler to place Pods. Limits are maximums enforced at runtime: exceeding CPU limits causes throttling; exceeding memory limits causes OOMKill. They also determine QoS class and eviction order.
 
+```yaml
+resources:
+  requests: { cpu: 250m, memory: 256Mi }   # used for scheduling
+  limits:   { cpu: "1",  memory: 512Mi }   # CPU over → throttled; memory over → OOMKilled
+```
+```bash
+kubectl top pods --containers
+kubectl describe node <n> | grep -A5 "Allocated resources"
+```
+
 ### How does a rolling update work and how do you roll back?
 The Deployment creates a new ReplicaSet and gradually scales it up while scaling the old one down, respecting `maxSurge` and `maxUnavailable` and waiting for readiness. Roll back with `kubectl rollout undo deployment/<name>` (optionally `--to-revision`).
+
+```yaml
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+```
+```bash
+kubectl set image deploy/api api=api:1.5
+kubectl rollout status deploy/api
+kubectl rollout undo deploy/api                 # back to the previous ReplicaSet
+kubectl rollout undo deploy/api --to-revision=3
+```
 
 ### What is an Ingress?
 An API object defining HTTP/HTTPS routing rules (hosts, paths, TLS) from outside the cluster to Services. It requires an Ingress controller to implement it. The Gateway API is the newer, more expressive alternative.
 
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  annotations: { cert-manager.io/cluster-issuer: letsencrypt }
+spec:
+  ingressClassName: nginx
+  tls: [{ hosts: [shop.example.com], secretName: shop-tls }]
+  rules:
+    - host: shop.example.com
+      http:
+        paths:
+          - { path: /api, pathType: Prefix, backend: { service: { name: api, port: { number: 80 } } } }
+          - { path: /,    pathType: Prefix, backend: { service: { name: web, port: { number: 80 } } } }
+```
+
 ### StatefulSet vs Deployment?
 Deployments manage interchangeable stateless Pods. StatefulSets give each Pod a stable identity (ordinal name, DNS), ordered deployment/scaling and its own persistent volume via `volumeClaimTemplates` — needed for databases and clustered stateful systems.
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: pg }
+spec:
+  serviceName: pg                    # headless Service → pg-0.pg, pg-1.pg DNS names
+  replicas: 3
+  selector: { matchLabels: { app: pg } }
+  template:
+    metadata: { labels: { app: pg } }
+    spec: { containers: [{ name: pg, image: postgres:16, volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }] }] }
+  volumeClaimTemplates:              # one PVC per pod: data-pg-0, data-pg-1 …
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
+```
 
 ### What is a DaemonSet?
 A controller ensuring a copy of a Pod runs on every (or selected) node — used for node-level agents like log collectors, monitoring exporters, CNI and storage plugins.
 
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: node-exporter, namespace: monitoring }
+spec:
+  selector: { matchLabels: { app: node-exporter } }
+  template:
+    metadata: { labels: { app: node-exporter } }
+    spec:
+      tolerations: [{ operator: Exists }]   # also on tainted/control-plane nodes
+      hostNetwork: true
+      containers: [{ name: exporter, image: prom/node-exporter:v1.8.2 }]
+```
+
 ### What is a PVC and how does dynamic provisioning work?
 A PersistentVolumeClaim is a request for storage with size and access mode. When it references a StorageClass, the CSI provisioner automatically creates a matching PersistentVolume (e.g., an EBS disk) and binds it to the claim.
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: { name: fast }
+provisioner: ebs.csi.aws.com
+parameters: { type: gp3 }
+allowVolumeExpansion: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: uploads }
+spec:
+  storageClassName: fast
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 50Gi } }   # CSI driver creates the disk + PV automatically
+```
 
 ## Advanced
 
 ### How does the HPA work?
 It periodically reads metrics (via metrics-server or custom/external metrics APIs), compares current utilisation (relative to requests) with the target, and computes desired replicas: `ceil(current * currentMetric / target)`, within min/max and with stabilisation windows to avoid flapping. It requires resource requests to be set.
 
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 300 }
+# desired = ceil(current × currentUtilization / target) — e.g. 4 × 140% / 70% = 8
+```
+
 ### Explain taints, tolerations and affinity.
 Taints on nodes repel Pods that don't tolerate them (dedicated or special hardware). Tolerations allow Pods onto tainted nodes but don't force them there. Node affinity attracts Pods to nodes with certain labels; pod anti-affinity spreads replicas across nodes/zones for availability.
+
+```bash
+kubectl taint nodes gpu-1 gpu=true:NoSchedule
+```
+```yaml
+spec:
+  tolerations: [{ key: gpu, operator: Equal, value: "true", effect: NoSchedule }]
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms: [{ matchExpressions: [{ key: accelerator, operator: In, values: [nvidia-a100] }] }]
+    podAntiAffinity:            # spread replicas across nodes
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm: { topologyKey: kubernetes.io/hostname, labelSelector: { matchLabels: { app: api } } }
+```
 
 ### How would you secure a Kubernetes cluster?
 RBAC with least privilege, Pod Security Admission (restricted), non-root/read-only containers with dropped capabilities, NetworkPolicies with default deny, etcd encryption and external secret management, image scanning/signing with admission policies, audit logging, private API endpoint, regular upgrades, and runtime security (Falco).
 
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: shop }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+---
+# Pod hardening
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities: { drop: [ALL] }
+  seccompProfile: { type: RuntimeDefault }
+```
+```bash
+kubectl label ns shop pod-security.kubernetes.io/enforce=restricted
+kubectl auth can-i delete pods --as=system:serviceaccount:shop:api
+```
+
 ### What is an Operator?
 A custom controller plus CustomResourceDefinitions that automate the lifecycle of a complex application (install, configure, scale, back up, upgrade, fail over) by encoding operational knowledge, reconciling custom resources just like built-in controllers do.
+
+```yaml A custom resource the operator reconciles
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata: { name: orders-db }
+spec:
+  instances: 3
+  storage: { size: 50Gi }
+  backup:
+    barmanObjectStore: { destinationPath: s3://backups/orders, s3Credentials: { inheritFromIAMRole: true } }
+# The operator creates pods, services, replication, failover and backups from this spec
+```
 
 ### Walk through debugging a Pod stuck in CrashLoopBackOff.
 `kubectl describe pod` for events, exit codes and probe failures; `kubectl logs --previous` for the crash output; verify env vars, ConfigMaps/Secrets and command/args; check if the liveness probe is killing a slow start (add a startup probe); check OOMKilled; run the image locally or with `kubectl debug`/an overridden command to inspect.
 
+```bash
+kubectl describe pod api-7c9d-x2k          # Last State: Terminated, Reason: Error, Exit Code: 1
+kubectl logs api-7c9d-x2k --previous       # crash output of the last attempt
+kubectl get pod api-7c9d-x2k -o yaml | grep -A5 -E 'env:|command:'
+kubectl debug -it api-7c9d-x2k --image=busybox --target=api   # ephemeral debug container
+kubectl run tmp --rm -it --image=api:1.4 --command -- sh       # start the image without its entrypoint
+```
+
 ### What happens when you run `kubectl apply -f deployment.yaml`?
 kubectl sends the manifest to the API server, which authenticates, authorizes (RBAC), runs admission controllers (mutating/validating) and stores the object in etcd. The Deployment controller creates a ReplicaSet; the ReplicaSet controller creates Pods; the scheduler binds them to nodes; each node's kubelet pulls images via the runtime, starts containers, runs probes and reports status; endpoints are updated once Pods are ready.
+
+```bash
+kubectl apply -f deployment.yaml -v=8 2>&1 | grep -E 'PATCH|POST|GET' | head   # see the API calls
+kubectl get events -w
+# API server → authn/authz → admission → etcd
+# Deployment controller → ReplicaSet → ReplicaSet controller → Pods
+# Scheduler binds Pods to nodes → kubelet pulls image, starts containers via the CRI
+```
 
 ### Helm vs Kustomize?
 Helm is a package manager with templated charts, values files, releases and rollbacks — great for distributing reusable apps. Kustomize uses template-free overlays and patches on plain YAML, built into kubectl — great for environment variations of your own manifests. They're often combined, typically driven by GitOps (Argo CD/Flux).
 
+```bash Helm
+helm install shop ./chart -f values-prod.yaml --set image.tag=1.4.0
+helm upgrade shop ./chart --set image.tag=1.5.0 && helm rollback shop 1
+```
+```yaml Kustomize overlays/prod/kustomization.yaml
+resources: [../../base]
+images: [{ name: api, newTag: "1.5.0" }]
+patches:
+  - target: { kind: Deployment, name: api }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 6
+```
+
 ### How do you achieve zero-downtime deployments?
 Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shutdown handling SIGTERM with a preStop sleep so endpoints update before termination, PodDisruptionBudgets, multiple replicas spread across nodes/zones, backward-compatible DB migrations, and canary/blue-green strategies for risky changes.
+
+```yaml
+spec:
+  strategy: { rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  template:
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          readinessProbe: { httpGet: { path: /ready, port: 8080 } }
+          lifecycle: { preStop: { exec: { command: ["sleep", "10"] } } }   # let endpoints update first
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: api }
+spec: { minAvailable: 2, selector: { matchLabels: { app: api } } }
+```
 
 # Scenario Questions
 
@@ -517,6 +810,13 @@ Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shu
 3. Common causes: the app exits (bad config, a missing env var or secret, an unreachable DB), the **liveness probe** kills it during slow start-up (add a `startupProbe`), or memory limits are too low (exit code 137).
 4. To poke around, run `kubectl debug` or override the command (`sleep infinity`).
 
+```bash
+kubectl describe pod web-6f9 | sed -n '/State:/,/Ready:/p'   # Exit Code 137 → OOMKilled? 1 → app error
+kubectl logs web-6f9 --previous --tail=50
+kubectl get cm,secret -n shop                                 # missing config referenced by the pod?
+kubectl get pod web-6f9 -o jsonpath='{.spec.containers[0].livenessProbe}'   # probe too aggressive?
+```
+
 ### A pod stays in `Pending`. What are the usual reasons?
 `kubectl describe pod` shows the scheduler's message. Usual reasons:
 - insufficient CPU or memory on every node (requests too high)
@@ -524,6 +824,14 @@ Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shu
 - an unbound PVC (no StorageClass, or a zone mismatch)
 - ResourceQuota exceeded
 - an image pull secret missing (that shows as `ImagePullBackOff` once the pod is scheduled)
+
+```bash
+kubectl describe pod api-xyz | tail -5
+# 0/5 nodes are available: 3 Insufficient cpu, 2 node(s) had untolerated taint {gpu: true}
+kubectl get pvc                     # PVC Pending → no StorageClass / wrong zone
+kubectl describe nodes | grep -A6 "Allocated resources"
+kubectl get resourcequota -n shop
+```
 
 ## Intermediate
 
@@ -534,12 +842,32 @@ Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shu
 - Make sure `terminationGracePeriodSeconds` covers the drain time.
 - Add a PodDisruptionBudget for node maintenance.
 
+```js App side: stop accepting, drain, exit
+process.on('SIGTERM', () => {
+  ready = false;                                  // readiness starts failing
+  setTimeout(() => server.close(() => process.exit(0)), 10_000);
+});
+```
+```yaml
+lifecycle: { preStop: { exec: { command: ["sleep", "10"] } } }
+readinessProbe: { httpGet: { path: /ready, port: 8080 }, periodSeconds: 2 }
+```
+
 ### A service can't reach another service by name. How do you troubleshoot it?
 - Check DNS (`nslookup svc.namespace.svc.cluster.local` from a debug pod).
 - Check that the Service selector matches the pod labels (`kubectl get endpoints <svc>`; if it's empty, the selector is wrong or no pod is ready).
 - Check that `targetPort` matches the container port.
 - Look for **NetworkPolicies** blocking traffic.
 - Check that the app listens on `0.0.0.0`.
+
+```bash
+kubectl run dbg --rm -it --image=nicolaka/netshoot -- bash
+nslookup payments.billing.svc.cluster.local      # DNS ok?
+curl -sv http://payments.billing:8080/health     # cross-namespace needs <svc>.<ns>
+kubectl get endpoints payments -n billing        # empty → selector doesn't match pod labels
+kubectl get pods -n billing --show-labels
+kubectl get networkpolicy -n billing             # default-deny blocking traffic?
+```
 
 ## Advanced
 
@@ -550,6 +878,25 @@ Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shu
 - Shrink image size and start-up time, and use startup probes.
 - Set requests correctly so the scheduler packs pods properly.
 
+```yaml KEDA: scale on queue depth, not CPU
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: worker }
+spec:
+  scaleTargetRef: { name: worker }
+  minReplicaCount: 2
+  maxReplicaCount: 50
+  triggers:
+    - type: kafka
+      metadata: { bootstrapServers: kafka:9092, consumerGroup: orders, topic: orders, lagThreshold: "100" }
+---
+# Overprovisioning: low-priority placeholder pods keep warm capacity
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: overprovisioning }
+value: -10
+```
+
 # Tricky Questions
 
 ## Beginner
@@ -557,10 +904,29 @@ Rolling updates with `maxUnavailable: 0`, correct readiness probes, graceful shu
 ### You `kubectl delete pod` a pod from a Deployment. What happens?
 A new pod is created straight away. The ReplicaSet controller reconciles back to the desired replica count. To stop it, scale the Deployment to 0 or delete the Deployment.
 
+```bash
+kubectl delete pod api-7c9d-x2k
+kubectl get pods -l app=api          # a new api-7c9d-… is already ContainerCreating
+kubectl scale deploy/api --replicas=0   # to actually stop it
+```
+
 ## Intermediate
 
 ### A container has `requests.memory: 256Mi` and `limits.memory: 512Mi`, and it uses 600Mi. What happens? What if it's CPU instead?
 Memory over the limit means the container is **OOMKilled** (exit code 137) and restarted. CPU over the limit means it's **throttled**, not killed. Requests drive scheduling and QoS class; when requests equal limits the pod is **Guaranteed**, which makes it the last to be evicted.
 
+```bash
+kubectl get pod api -o jsonpath='{.status.containerStatuses[0].lastState.terminated.reason}'   # OOMKilled
+# CPU over the limit → throttling, visible in metrics:
+# rate(container_cpu_cfs_throttled_periods_total[5m]) / rate(container_cpu_cfs_periods_total[5m])
+```
+
 ### Why might a liveness probe that checks the database cause an outage?
 If the database blips, **every** pod fails liveness and is restarted at the same time, which turns a short database issue into a full outage plus a restart storm. A liveness probe should check only whether the process itself is healthy. Put dependency checks in the **readiness** probe, or nowhere.
+
+```js
+app.get('/healthz', (req, res) => res.sendStatus(200));            // liveness: is THIS process alive?
+app.get('/ready', async (req, res) => {                             // readiness: can it serve now?
+  try { await db.query('SELECT 1'); res.sendStatus(200); } catch { res.sendStatus(503); }
+});
+```
